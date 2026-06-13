@@ -379,7 +379,8 @@ async def yodesi_backend(
         if part is not None:
             part.name = f"yodesi-{slug}-{d.isoformat()}.mp4"
             return Source(
-                parts=[part], kind="hls", quality="720p", backend="yodesi",
+                # yodesi's master playlist only offers a 720x480 variant.
+                parts=[part], kind="hls", quality="480p", backend="yodesi",
             )
     return None
 
@@ -389,8 +390,9 @@ async def yodesi_backend(
 Backend = Callable[
     [httpx.AsyncClient, dict, date], Awaitable["Source | None"]
 ]
+# 720p sources first, 360p desitvbox last so it's only ever a last resort.
 BACKENDS: list[Backend] = [
-    hubref_backend, desitvbox_backend, yodesi_backend,
+    hubref_backend, yodesi_backend, desitvbox_backend,
 ]
 QUALITY_RANK = {"unknown": 0, "360p": 0, "480p": 1, "720p": 2, "1080p": 3}
 
@@ -412,6 +414,12 @@ async def resolve(
                 file=sys.stderr,
             )
             continue
+        if QUALITY_RANK.get(src.quality, 0) < QUALITY_RANK["720p"]:
+            print(
+                f"  [{d}] WARN: only {src.quality} available "
+                f"({src.backend}); pass --quality 720p to skip it.",
+                file=sys.stderr,
+            )
         return src
     return None
 
@@ -514,7 +522,7 @@ def ffmpeg_concat(parts: list[Path], out: Path) -> None:
     try:
         _ffmpeg_run(
             ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-             "-i", str(listfile), "-c", "copy"],
+             "-i", str(listfile), "-c", "copy", "-f", "mp4"],
             out,
         )
     finally:
@@ -528,7 +536,7 @@ def ffmpeg_hls(part: Part, out: Path) -> None:
             "-headers",
             "".join(f"{k}: {v}\r\n" for k, v in part.headers.items()),
         ]
-    cmd += ["-i", part.url, "-c", "copy", "-bsf:a", "aac_adtstoasc"]
+    cmd += ["-i", part.url, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "mp4"]
     _ffmpeg_run(cmd, out)
 
 
