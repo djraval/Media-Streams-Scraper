@@ -16,7 +16,7 @@ Add a backend: write `async fn(client, show, date) -> Source | None` and
                append it to BACKENDS. First non-None wins.
 
 Usage:
-  uv run scraper.py [options]
+  uv run scraper.py [--show NAME] [--out PATH] [--probe YYYY-MM-DD]
 """
 
 from __future__ import annotations
@@ -394,11 +394,10 @@ Backend = Callable[
 BACKENDS: list[Backend] = [
     hubref_backend, yodesi_backend, desitvbox_backend,
 ]
-QUALITY_RANK = {"unknown": 0, "360p": 0, "480p": 1, "720p": 2, "1080p": 3}
 
 
 async def resolve(
-    client: httpx.AsyncClient, show: dict, d: date, min_q: str | None
+    client: httpx.AsyncClient, show: dict, d: date
 ) -> Source | None:
     for be in BACKENDS:
         try:
@@ -408,16 +407,10 @@ async def resolve(
             continue
         if src is None:
             continue
-        if min_q and QUALITY_RANK.get(src.quality, 0) < QUALITY_RANK[min_q]:
-            print(
-                f"  [{d}] skip {src.backend} ({src.quality}, want >= {min_q})",
-                file=sys.stderr,
-            )
-            continue
-        if QUALITY_RANK.get(src.quality, 0) < QUALITY_RANK["720p"]:
+        if src.quality != "720p":
             print(
                 f"  [{d}] WARN: only {src.quality} available "
-                f"({src.backend}); pass --quality 720p to skip it.",
+                f"({src.backend}).",
                 file=sys.stderr,
             )
         return src
@@ -447,23 +440,13 @@ def scan_dates(out_dir: Path, title: str) -> set[date]:
 def plan(
     existing: set[date],
     today: date,
-    since: date | None,
-    max_n: int | None,
     window: int = 7,
 ) -> list[date]:
-    if since:
-        start = since
-        if start > today:
-            print(
-                f"WARN: --since {start} is in the future; no eps in range.",
-                file=sys.stderr,
-            )
-    elif existing:
+    if existing:
         start = max(existing) + timedelta(days=1)
     else:
         print(
-            f"INFO: empty output dir; defaulting to last {window} days. "
-            "Use --since YYYY-MM-DD to override.",
+            f"INFO: empty output dir; defaulting to last {window} days.",
             file=sys.stderr,
         )
         start = today - timedelta(days=window)
@@ -473,7 +456,7 @@ def plan(
         if d not in existing:
             work.append(d)
         d += timedelta(days=1)
-    return work[:max_n] if max_n is not None else work
+    return work
 
 
 # --- Download + materialize -----------------------------------------------
@@ -546,9 +529,8 @@ async def process_episode(
     d: date,
     out_dir: Path,
     scratch: Path,
-    min_q: str | None,
 ) -> tuple[bool, str]:
-    src = await resolve(client, show, d, min_q)
+    src = await resolve(client, show, d)
     if src is None:
         return False, "no backend"
     out = out_dir / f"{show['title']} - {d.isoformat()}.mp4"
@@ -608,25 +590,12 @@ def parse_args() -> argparse.Namespace:
         help="Show to fetch (default: anupama).",
     )
     ap.add_argument(
-        "--since", type=date.fromisoformat, metavar="YYYY-MM-DD",
-        help="Override resume point.",
-    )
-    ap.add_argument("--max", type=int, metavar="N", help="Cap downloads.")
-    ap.add_argument(
-        "--quality", choices=["any", "720p"], default="any",
-        help="'720p' skips lower-quality backends.",
-    )
-    ap.add_argument(
-        "--dry-run", action="store_true",
-        help="Print the worklist; don't download.",
+        "--out", type=Path, default=Path.cwd(),
+        help="Output directory (default: cwd).",
     )
     ap.add_argument(
         "--probe", type=date.fromisoformat, metavar="YYYY-MM-DD",
         help="Run every backend against one date; no download.",
-    )
-    ap.add_argument(
-        "--out", type=Path, default=Path.cwd(),
-        help="Output directory (default: cwd).",
     )
     return ap.parse_args()
 
@@ -662,8 +631,7 @@ async def _main(args: argparse.Namespace) -> int:
         )
         print(f"  {len(existing)} episodes already on disk.", file=sys.stderr)
 
-        min_q = None if args.quality == "any" else args.quality
-        worklist = plan(existing, date.today(), args.since, args.max)
+        worklist = plan(existing, date.today())
         if not worklist:
             print("Nothing to do.", file=sys.stderr)
             shutil.rmtree(scratch, ignore_errors=True)
@@ -673,10 +641,6 @@ async def _main(args: argparse.Namespace) -> int:
         for d in worklist:
             print(f"  {d.isoformat()}", file=sys.stderr)
 
-        if args.dry_run:
-            shutil.rmtree(scratch, ignore_errors=True)
-            return 0
-
         out_dir.mkdir(parents=True, exist_ok=True)
         ok = 0
         failed: list[tuple[date, str]] = []
@@ -684,7 +648,7 @@ async def _main(args: argparse.Namespace) -> int:
             print(f"\n=== {d.isoformat()} ===", file=sys.stderr)
             try:
                 success, msg = await process_episode(
-                    client, show, d, out_dir, scratch, min_q,
+                    client, show, d, out_dir, scratch,
                 )
             except Exception as e:                          # noqa: BLE001
                 success, msg = False, f"crash: {e!s}"

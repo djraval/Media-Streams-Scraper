@@ -25,12 +25,8 @@ Flags:
 
 ```
 --show NAME            pick from the SHOWS dict (default: anupama)
---since YYYY-MM-DD     override resume point (use for first-run backfill)
---max N                cap downloads this run
---quality 720p         skip lower-quality backends (desitvbox is 360p)
---dry-run              show the worklist; don't download
---probe YYYY-MM-DD     try every backend against one date; no download
 --out PATH             output directory (default: cwd)
+--probe YYYY-MM-DD     try every backend against one date; no download
 ```
 
 ## Adding a show
@@ -72,7 +68,5 @@ The resolver tries backends in list order; first non-None wins.
 
 - Single-stream per part. The Yandex CDN throttles per connection, so
   aria2's segmented download wouldn't help much.
-- `desitvbox.cfd` is 360p. Use `--quality 720p` if you'd rather fail
-  than silently drop quality.
 - `yodesi.net` uses HLS with IP-bound tokens — fine when running on
   the user's machine; would not work from a different egress IP.
