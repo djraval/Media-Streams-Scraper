@@ -16,7 +16,7 @@ Add a backend: write `async fn(client, show, date) -> Source | None` and
                append it to BACKENDS. First non-None wins.
 
 Usage:
-  uv run scraper.py [--show NAME] [--out PATH] [--probe YYYY-MM-DD]
+  uv run scraper.py [--show NAME] [--out PATH] [--days N] [--probe YYYY-MM-DD]
 """
 
 from __future__ import annotations
@@ -440,18 +440,17 @@ def scan_dates(out_dir: Path, title: str) -> set[date]:
 def plan(
     existing: set[date],
     today: date,
-    window: int = 7,
+    days: int = 7,
 ) -> list[date]:
-    if existing:
-        start = max(existing) + timedelta(days=1)
-    else:
+    # Download whatever's missing from the last `days` days (newest included).
+    # This auto-resumes and also backfills gaps left by an earlier failed run.
+    if not existing:
         print(
-            f"INFO: empty output dir; defaulting to last {window} days.",
+            f"INFO: empty output dir; grabbing the last {days} days.",
             file=sys.stderr,
         )
-        start = today - timedelta(days=window)
     work: list[date] = []
-    d = start
+    d = today - timedelta(days=days - 1)
     while d <= today:
         if d not in existing:
             work.append(d)
@@ -594,6 +593,10 @@ def parse_args() -> argparse.Namespace:
         help="Output directory (default: cwd).",
     )
     ap.add_argument(
+        "--days", type=int, default=7, metavar="N",
+        help="How many recent days to keep filled (default: 7).",
+    )
+    ap.add_argument(
         "--probe", type=date.fromisoformat, metavar="YYYY-MM-DD",
         help="Run every backend against one date; no download.",
     )
@@ -631,7 +634,7 @@ async def _main(args: argparse.Namespace) -> int:
         )
         print(f"  {len(existing)} episodes already on disk.", file=sys.stderr)
 
-        worklist = plan(existing, date.today())
+        worklist = plan(existing, date.today(), args.days)
         if not worklist:
             print("Nothing to do.", file=sys.stderr)
             shutil.rmtree(scratch, ignore_errors=True)

@@ -18,14 +18,16 @@ cd /path/to/output/dir
 uv run scraper.py
 ```
 
-First run with an empty folder grabs the last 7 days. After that it
-just downloads anything new.
+Each run downloads whatever is missing from the last 7 days, so it
+auto-resumes and backfills any gaps. Want a bigger window (e.g. a
+one-time 14-day backfill)? Use `--days 14`.
 
 Flags:
 
 ```
 --show NAME            pick from the SHOWS dict (default: anupama)
 --out PATH             output directory (default: cwd)
+--days N               keep the last N days filled (default: 7)
 --probe YYYY-MM-DD     try every backend against one date; no download
 ```
 
