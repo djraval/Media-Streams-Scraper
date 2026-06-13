@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+
+.scratch/
+*.partial
+.concat.txt
+
+*.mp4
+*.m3u8
+
+.env
+.venv/
+
+.claude/
+.remember/
