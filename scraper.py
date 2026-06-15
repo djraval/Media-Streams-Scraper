@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["httpx"]
+# dependencies = ["httpx", "yt-dlp"]
 # ///
 """daily-soap-scraper - download daily Hindi-serial episodes.
 
@@ -13,7 +13,8 @@ files and keep the last N days filled. No external state.
 
 Add a show:    append a dict entry to SHOWS.
 Add a backend: write `async fn(client, show, date) -> Source | None` in
-               backends.py and append it to BACKENDS. First non-None wins.
+               backends.py and append it to BACKENDS. Backends are tried in
+               order; the first one that downloads successfully wins.
 
 Usage:
   uv run scraper.py [--show NAME] [--out PATH] [--days N] [--probe YYYY-MM-DD]
@@ -34,6 +35,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
+import yt_dlp
+from yt_dlp.utils import DownloadError
 
 # Backends, the helpers they use, and the Part/Source shapes all live in
 # backends.py. Re-imported here for the CLI and for older local scripts that
@@ -43,10 +46,11 @@ from backends import (
     BROWSER_HEADERS,
     Part,
     Source,
+    UA,
     desitvbox_backend,
     hubref_backend,
+    iter_sources,
     probe,
-    resolve,
     unpack,
     yadisk_resolve,
     yodesi_backend,
@@ -155,28 +159,83 @@ def scratch_part_path(scratch: Path, d: date, part_number: int) -> Path:
     return scratch / f"{d.isoformat()}-part{part_number:02d}.mp4"
 
 
+class _YdlLogger:
+    """Route yt-dlp output to stderr. debug/info are dropped to stay terse;
+    warnings and errors are surfaced (prefixed so they are recognizable)."""
+
+    def debug(self, msg: str) -> None:        # yt-dlp sends info here too
+        pass
+
+    def info(self, msg: str) -> None:
+        pass
+
+    def warning(self, msg: str) -> None:
+        print(f"  yt-dlp: {msg}", file=sys.stderr)
+
+    def error(self, msg: str) -> None:
+        print(f"  yt-dlp: {msg}", file=sys.stderr)
+
+
+def _progress_hook(d: dict) -> None:
+    if d.get("status") == "finished":
+        name = d.get("filename", "")
+        print(f"  fetched {name}", file=sys.stderr)
+
+
+def _ydl_opts(part: Part, outtmpl: str) -> dict:
+    """One options dict for every part, plain mp4 or HLS alike.
+
+    `merge_output_format="mp4"` is a no-op for a plain mp4 and forces an mp4
+    container for HLS; `hls_use_mpegts=False` makes yt-dlp rewrap HLS to mp4
+    (its FFmpegFixupM3u8PP applies the aac_adtstoasc fix we used to do by hand).
+    Header merge mirrors the old `{**BROWSER_HEADERS, **part.headers}`: the
+    default UA is present, and a part's own headers (e.g. yodesi's Referer)
+    win on conflict.
+    """
+    return {
+        "outtmpl": outtmpl,
+        "http_headers": {"User-Agent": UA, **part.headers},
+        "merge_output_format": "mp4",
+        "hls_use_mpegts": False,
+        "retries": 10,
+        "fragment_retries": 10,
+        "file_access_retries": 5,
+        "skip_unavailable_fragments": True,
+        "continuedl": True,
+        "concurrent_fragment_downloads": 4,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "logger": _YdlLogger(),
+        "progress_hooks": [_progress_hook],
+    }
+
+
+def ydl_download(part: Part, dest_stem: Path) -> Path:
+    """Download one part with yt-dlp into <dest_stem>.<ext-chosen-by-yt-dlp>,
+    then return the file that was actually produced.
+
+    Synchronous (yt-dlp blocks); call from async code via asyncio.to_thread.
+    Raises DownloadError on failure or if no output file appears.
+
+    Any pre-existing files matching the stem are removed first so a retry
+    after a failed attempt (e.g. backend fallback reusing the same stem)
+    never resumes or returns another attempt's leftovers.
+    """
+    for stale in dest_stem.parent.glob(dest_stem.name + ".*"):
+        stale.unlink(missing_ok=True)
+    outtmpl = str(dest_stem) + ".%(ext)s"
+    with yt_dlp.YoutubeDL(_ydl_opts(part, outtmpl)) as ydl:
+        ydl.download([part.url])
+    produced = sorted(dest_stem.parent.glob(dest_stem.name + ".*"))
+    # ignore any stray .partial/.ytdl/.part leftovers; want the finished file
+    produced = [p for p in produced if p.suffix not in (".partial", ".part", ".ytdl")]
+    if not produced:
+        raise DownloadError(f"yt-dlp produced no file for {part.url}")
+    return produced[0]
+
+
 # --- Download + materialize -----------------------------------------------
-
-CHUNK = 1 << 20
-
-
-async def stream_to_file(
-    client: httpx.AsyncClient, part: Part, dest: Path
-) -> Path:
-    tmp = dest.with_suffix(dest.suffix + ".partial")
-    hdrs = {**BROWSER_HEADERS, **part.headers}
-    try:
-        async with client.stream("GET", part.url, headers=hdrs, timeout=None) as r:
-            r.raise_for_status()
-            with tmp.open("wb") as f:
-                async for chunk in r.aiter_bytes(CHUNK):
-                    f.write(chunk)
-        tmp.replace(dest)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    return dest
-
 
 def promote_to_output(src: Path, out: Path) -> None:
     tmp = out.with_suffix(out.suffix + ".partial")
@@ -237,15 +296,30 @@ def ffmpeg_concat(parts: list[Path], out: Path) -> None:
         listfile.unlink(missing_ok=True)
 
 
-def ffmpeg_hls(part: Part, out: Path) -> None:
-    cmd = ["ffmpeg", "-y"]
-    if part.headers:
-        cmd += [
-            "-headers",
-            "".join(f"{k}: {v}\r\n" for k, v in part.headers.items()),
-        ]
-    cmd += ["-i", part.url, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "mp4"]
-    _ffmpeg_run(cmd, out)
+async def download_source(
+    src: Source, out: Path, scratch: Path, d: date
+) -> None:
+    """Download every part of one source with yt-dlp, then materialize `out`:
+    single part -> atomic promote; multiple parts -> ffmpeg concat.
+
+    Propagates DownloadError if a part fails to download (the caller treats
+    that as a signal to fall back to the next backend). A muxing/promote
+    failure (RuntimeError from ffmpeg_concat, OSError from promote_to_output)
+    also propagates but is intentionally NOT a fallback trigger: it fails the
+    episode rather than masking a likely-bad source.
+    """
+    downloaded: list[Path] = []
+    try:
+        for i, part in enumerate(src.parts, 1):
+            stem = scratch_part_path(scratch, d, i).with_suffix("")
+            downloaded.append(await asyncio.to_thread(ydl_download, part, stem))
+        if len(downloaded) == 1:
+            promote_to_output(downloaded[0], out)
+        else:
+            ffmpeg_concat(downloaded, out)
+    finally:
+        for p in downloaded:
+            p.unlink(missing_ok=True)
 
 
 async def process_episode(
@@ -255,29 +329,19 @@ async def process_episode(
     out_dir: Path,
     scratch: Path,
 ) -> tuple[bool, str]:
-    src = await resolve(client, show, d)
-    if src is None:
-        return False, "no backend"
     out = out_dir / f"{show['title']} - {d.isoformat()}.mp4"
-
-    if src.kind == "hls":
-        ffmpeg_hls(src.parts[0], out)
-        return True, f"{src.backend}/{src.quality}"
-
-    downloaded: list[Path] = []
-    try:
-        for i, p in enumerate(src.parts, 1):
-            downloaded.append(
-                await stream_to_file(client, p, scratch_part_path(scratch, d, i))
+    async for src in iter_sources(client, show, d):
+        try:
+            await download_source(src, out, scratch, d)
+        except DownloadError as e:
+            print(
+                f"  {src.backend} resolved but download failed ({e}); "
+                f"trying next backend",
+                file=sys.stderr,
             )
-        if len(downloaded) == 1:
-            promote_to_output(downloaded[0], out)
-        else:
-            ffmpeg_concat(downloaded, out)
-    finally:
-        for p in downloaded:
-            p.unlink(missing_ok=True)
-    return True, f"{src.backend}/{src.quality}"
+            continue
+        return True, f"{src.backend}/{src.quality}"
+    return False, "no backend"
 
 
 # --- Main -----------------------------------------------------------------

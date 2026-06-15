@@ -9,7 +9,10 @@ Auto-resumes by scanning the output folder and keeping the last N days filled.
 ## Requirements
 
 - `uv` (https://docs.astral.sh/uv/)
-- `ffmpeg` on `PATH`
+- `ffmpeg` on `PATH` (yt-dlp drives it for HLS muxing and multi-part concat)
+- `yt-dlp` — the download engine. Installed automatically by `uv run` via the
+  inline script deps. For a bare `python3 scraper.py` (or to run the tests),
+  install it yourself: `pip install yt-dlp`.
 
 ## Use
 
@@ -88,14 +91,15 @@ async def newsite_backend(client, show, d: date) -> Source | None:
                   backend="newsite")
 ```
 
-The resolver tries backends in list order; first non-None wins. Keep candidate
-extraction broad, but only return a `Source` for direct MP4, HLS playlists,
-Yandex-resolved links, or known player-derived media URLs.
+The resolver yields backends in list order, and the downloader tries each in
+turn until one downloads successfully (a failed download falls back to the next
+backend). Keep candidate extraction broad, but only return a `Source` for direct
+MP4, HLS playlists, Yandex-resolved links, or known player-derived media URLs.
 
 ## Notes
 
-- Single-stream per part. The Yandex CDN throttles per connection, so
-  aria2's segmented download wouldn't help much.
+- Downloads run through `yt-dlp` (Python library, in-process): one options dict
+  handles both direct MP4 and HLS, with retries, fragment recovery, and resume.
 - `yodesi.net` uses HLS with IP-bound tokens — fine when running on
   the user's machine; would not work from a different egress IP.
 
@@ -122,9 +126,9 @@ ffmpeg. Use it before changing backend parsing.
 This is intended to stay script-like, not become a package:
 
 - `scraper.py` is the CLI entrypoint. Keep argument parsing, planning, output
-  locking, scratch directories, downloads, and ffmpeg materialization here.
+  locking, scratch directories, yt-dlp downloads, and ffmpeg materialization here.
 - `backends.py` owns where episode URLs come from. It contains `Part`, `Source`,
-  parser helpers, backend-specific fetch/resolve logic, `resolve()`, and
+  parser helpers, backend-specific fetch/resolve logic, `iter_sources()`, and
   `probe()`.
 - `test_scraper.py` contains unit tests with mocked HTTP responses. Tests should
   not depend on live mirror sites.
@@ -147,8 +151,8 @@ Only return a `Source` for direct MP4 URLs, HLS playlists, Yandex-resolved links
 or known player-derived media URLs.
 
 `BACKENDS` order matters. Higher-quality or preferred sources should come first;
-`resolve()` returns the first usable source and warns when quality is below
-`720p`.
+`iter_sources()` yields usable sources in that order (warning when quality is
+below `720p`), and the downloader uses the first one that downloads successfully.
 
 Do not make failed backend recovery guess new websites. If all known backends
 fail, keep the existing failure behavior and improve `--probe` diagnostics so a

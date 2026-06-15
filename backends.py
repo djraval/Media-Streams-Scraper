@@ -10,7 +10,7 @@ import html
 import inspect
 import re
 import sys
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date
 from html.parser import HTMLParser
@@ -654,9 +654,14 @@ async def _call_probe_backend(
     return await backend(client, show, d)
 
 
-async def resolve(
+async def iter_sources(
     client: httpx.AsyncClient, show: ShowConfig, d: date
-) -> Source | None:
+) -> AsyncIterator[Source]:
+    """Yield resolvable sources in backend-priority order.
+
+    Unlike the old `resolve()` (which returned only the first hit), this lets
+    the caller try the next backend if a resolved URL fails to download.
+    """
     for backend in BACKENDS:
         try:
             src = await backend(client, show, d)
@@ -670,8 +675,7 @@ async def resolve(
                 f"  [{d}] WARN: only {src.quality} available ({src.backend}).",
                 file=sys.stderr,
             )
-        return src
-    return None
+        yield src
 
 
 async def probe(client: httpx.AsyncClient, show: ShowConfig, d: date) -> None:
