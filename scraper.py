@@ -321,28 +321,18 @@ def ffmpeg_hls(part: Part, out: Path) -> None:
     _ffmpeg_run(cmd, out)
 
 
-async def process_episode(
-    client: httpx.AsyncClient,
-    show: dict,
-    d: date,
-    out_dir: Path,
-    scratch: Path,
-) -> tuple[bool, str]:
-    src = await resolve(client, show, d)
-    if src is None:
-        return False, "no backend"
-    out = out_dir / f"{show['title']} - {d.isoformat()}.mp4"
-
-    if src.kind == "hls":
-        ffmpeg_hls(src.parts[0], out)
-        return True, f"{src.backend}/{src.quality}"
-
+async def download_source(
+    src: Source, out: Path, scratch: Path, d: date
+) -> None:
+    """Download every part of one source with yt-dlp, then materialize `out`:
+    single part -> atomic promote; multiple parts -> ffmpeg concat.
+    Raises DownloadError if any part fails (caller falls back to next source).
+    """
     downloaded: list[Path] = []
     try:
-        for i, p in enumerate(src.parts, 1):
-            downloaded.append(
-                await stream_to_file(client, p, scratch_part_path(scratch, d, i))
-            )
+        for i, part in enumerate(src.parts, 1):
+            stem = scratch_part_path(scratch, d, i).with_suffix("")
+            downloaded.append(await asyncio.to_thread(ydl_download, part, stem))
         if len(downloaded) == 1:
             promote_to_output(downloaded[0], out)
         else:
@@ -350,7 +340,28 @@ async def process_episode(
     finally:
         for p in downloaded:
             p.unlink(missing_ok=True)
-    return True, f"{src.backend}/{src.quality}"
+
+
+async def process_episode(
+    client: httpx.AsyncClient,
+    show: dict,
+    d: date,
+    out_dir: Path,
+    scratch: Path,
+) -> tuple[bool, str]:
+    out = out_dir / f"{show['title']} - {d.isoformat()}.mp4"
+    async for src in iter_sources(client, show, d):
+        try:
+            await download_source(src, out, scratch, d)
+        except DownloadError as e:
+            print(
+                f"  {src.backend} resolved but download failed ({e}); "
+                f"trying next backend",
+                file=sys.stderr,
+            )
+            continue
+        return True, f"{src.backend}/{src.quality}"
+    return False, "no backend"
 
 
 # --- Main -----------------------------------------------------------------

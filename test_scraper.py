@@ -510,8 +510,8 @@ class ScanDatesTests(unittest.TestCase):
 
 class ScratchNamingTests(unittest.TestCase):
     def test_process_episode_uses_local_part_names_inside_scratch(self):
-        async def fake_resolve(client, show, d):
-            return scraper.Source(
+        async def fake_iter_sources(client, show, d):
+            yield scraper.Source(
                 parts=[
                     scraper.Part(name="../escape.mp4", url="https://example/1"),
                     scraper.Part(name="/tmp/escape.mp4", url="https://example/2"),
@@ -521,11 +521,13 @@ class ScratchNamingTests(unittest.TestCase):
                 backend="fake",
             )
 
-        seen_destinations = []
+        seen_stems = []
 
-        async def fake_stream_to_file(client, part, dest):
-            seen_destinations.append(dest)
-            return dest
+        def fake_ydl_download(part, dest_stem):
+            seen_stems.append(dest_stem)
+            produced = dest_stem.parent / (dest_stem.name + ".mp4")
+            produced.write_bytes(b"v")
+            return produced
 
         concat_inputs = []
 
@@ -541,8 +543,8 @@ class ScratchNamingTests(unittest.TestCase):
             scratch.mkdir(parents=True)
 
             with (
-                patch.object(scraper, "resolve", fake_resolve),
-                patch.object(scraper, "stream_to_file", fake_stream_to_file),
+                patch.object(scraper, "iter_sources", fake_iter_sources),
+                patch.object(scraper, "ydl_download", fake_ydl_download),
                 patch.object(scraper, "ffmpeg_concat", fake_ffmpeg_concat),
             ):
                 success, msg = asyncio.run(
@@ -556,13 +558,152 @@ class ScratchNamingTests(unittest.TestCase):
                 )
 
         expected = [
-            scratch / "2026-06-14-part01.mp4",
-            scratch / "2026-06-14-part02.mp4",
+            scratch / "2026-06-14-part01",
+            scratch / "2026-06-14-part02",
         ]
         self.assertTrue(success)
         self.assertEqual(msg, "fake/720p")
-        self.assertEqual(seen_destinations, expected)
-        self.assertEqual(concat_inputs, expected)
+        self.assertEqual(seen_stems, expected)
+        self.assertEqual(
+            concat_inputs,
+            [scratch / "2026-06-14-part01.mp4", scratch / "2026-06-14-part02.mp4"],
+        )
+
+
+class DownloadSourceTests(unittest.TestCase):
+    def test_single_part_is_promoted_not_concatenated(self):
+        produced_log = []
+        concat_called = []
+
+        def fake_ydl_download(part, dest_stem):
+            p = dest_stem.parent / (dest_stem.name + ".mp4")
+            p.write_bytes(b"single")
+            produced_log.append(p)
+            return p
+
+        def fake_concat(parts, out):
+            concat_called.append(parts)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "out"; out_dir.mkdir()
+            scratch = out_dir / ".scratch" / "run-1"; scratch.mkdir(parents=True)
+            out = out_dir / "Anupamaa - 2026-06-14.mp4"
+            src = scraper.Source(
+                parts=[scraper.Part(name="p", url="https://cdn/x.mp4")],
+                kind="mp4", quality="720p", backend="hubref",
+            )
+            with (
+                patch.object(scraper, "ydl_download", fake_ydl_download),
+                patch.object(scraper, "ffmpeg_concat", fake_concat),
+            ):
+                asyncio.run(
+                    scraper.download_source(src, out, scratch, date(2026, 6, 14))
+                )
+            self.assertTrue(out.exists())
+            self.assertEqual(out.read_bytes(), b"single")
+            self.assertEqual(concat_called, [])  # never concatenated for 1 part
+            # scratch part cleaned up
+            self.assertFalse(produced_log[0].exists())
+
+
+class FallbackTests(unittest.TestCase):
+    def test_download_failure_falls_through_to_next_backend(self):
+        async def fake_iter_sources(client, show, d):
+            yield scraper.Source(
+                parts=[scraper.Part(name="p", url="https://dead/x.mp4")],
+                kind="mp4", quality="720p", backend="hubref",
+            )
+            yield scraper.Source(
+                parts=[scraper.Part(name="p", url="https://live/x.mp4")],
+                kind="mp4", quality="480p", backend="desitvbox",
+            )
+
+        attempts = []
+
+        def fake_ydl_download(part, dest_stem):
+            attempts.append(part.url)
+            if part.url == "https://dead/x.mp4":
+                raise scraper.DownloadError("dead url")
+            p = dest_stem.parent / (dest_stem.name + ".mp4")
+            p.write_bytes(b"ok")
+            return p
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "out"; out_dir.mkdir()
+            scratch = out_dir / ".scratch" / "run-1"; scratch.mkdir(parents=True)
+            with (
+                patch.object(scraper, "iter_sources", fake_iter_sources),
+                patch.object(scraper, "ydl_download", fake_ydl_download),
+                patch("sys.stderr", io.StringIO()),
+            ):
+                success, msg = asyncio.run(
+                    scraper.process_episode(
+                        object(), {"title": "Anupamaa"},
+                        date(2026, 6, 14), out_dir, scratch,
+                    )
+                )
+            self.assertTrue(success)
+            self.assertEqual(msg, "desitvbox/480p")
+            self.assertEqual(
+                attempts, ["https://dead/x.mp4", "https://live/x.mp4"]
+            )
+            self.assertTrue((out_dir / "Anupamaa - 2026-06-14.mp4").exists())
+
+    def test_all_backends_failing_returns_no_backend(self):
+        async def empty_iter(client, show, d):
+            return
+            yield  # pragma: no cover  (makes this an async generator)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "out"; out_dir.mkdir()
+            scratch = out_dir / ".scratch" / "run-1"; scratch.mkdir(parents=True)
+            with (
+                patch.object(scraper, "iter_sources", empty_iter),
+                patch("sys.stderr", io.StringIO()),
+            ):
+                success, msg = asyncio.run(
+                    scraper.process_episode(
+                        object(), {"title": "Anupamaa"},
+                        date(2026, 6, 14), out_dir, scratch,
+                    )
+                )
+            self.assertFalse(success)
+            self.assertEqual(msg, "no backend")
+
+    def test_every_source_download_fails_returns_no_backend(self):
+        async def fake_iter_sources(client, show, d):
+            yield scraper.Source(
+                parts=[scraper.Part(name="p", url="https://a/x.mp4")],
+                kind="mp4", quality="720p", backend="hubref",
+            )
+            yield scraper.Source(
+                parts=[scraper.Part(name="p", url="https://b/x.mp4")],
+                kind="hls", quality="480p", backend="yodesi",
+            )
+
+        def always_fail(part, dest_stem):
+            raise scraper.DownloadError("nope")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "out"; out_dir.mkdir()
+            scratch = out_dir / ".scratch" / "run-1"; scratch.mkdir(parents=True)
+            with (
+                patch.object(scraper, "iter_sources", fake_iter_sources),
+                patch.object(scraper, "ydl_download", always_fail),
+                patch("sys.stderr", io.StringIO()),
+            ):
+                success, msg = asyncio.run(
+                    scraper.process_episode(
+                        object(), {"title": "Anupamaa"},
+                        date(2026, 6, 14), out_dir, scratch,
+                    )
+                )
+            self.assertFalse(success)
+            self.assertEqual(msg, "no backend")
 
 
 class FfmpegTests(unittest.TestCase):
