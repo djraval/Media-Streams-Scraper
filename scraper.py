@@ -181,6 +181,35 @@ def _progress_hook(d: dict) -> None:
         print(f"  fetched {name}", file=sys.stderr)
 
 
+def _ydl_opts(part: Part, outtmpl: str) -> dict:
+    """One options dict for every part, plain mp4 or HLS alike.
+
+    `merge_output_format="mp4"` is a no-op for a plain mp4 and forces an mp4
+    container for HLS; `hls_use_mpegts=False` makes yt-dlp rewrap HLS to mp4
+    (its FFmpegFixupM3u8PP applies the aac_adtstoasc fix we used to do by hand).
+    Header merge mirrors the old `{**BROWSER_HEADERS, **part.headers}`: the
+    default UA is present, and a part's own headers (e.g. yodesi's Referer)
+    win on conflict.
+    """
+    return {
+        "outtmpl": outtmpl,
+        "http_headers": {"User-Agent": UA, **part.headers},
+        "merge_output_format": "mp4",
+        "hls_use_mpegts": False,
+        "retries": 10,
+        "fragment_retries": 10,
+        "file_access_retries": 5,
+        "skip_unavailable_fragments": True,
+        "continuedl": True,
+        "concurrent_fragment_downloads": 4,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "logger": _YdlLogger(),
+        "progress_hooks": [_progress_hook],
+    }
+
+
 # --- Download + materialize -----------------------------------------------
 
 CHUNK = 1 << 20

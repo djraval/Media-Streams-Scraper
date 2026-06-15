@@ -98,6 +98,35 @@ class IterSourcesTests(unittest.TestCase):
         self.assertEqual(order, ["yodesi"])
 
 
+class YdlOptsTests(unittest.TestCase):
+    def test_opts_for_plain_mp4_part(self):
+        part = scraper.Part(name="p1", url="https://cdn/x.mp4")
+        opts = scraper._ydl_opts(part, "/scratch/out.%(ext)s")
+        self.assertEqual(opts["outtmpl"], "/scratch/out.%(ext)s")
+        # UA always present; no Referer for a headerless part
+        self.assertEqual(opts["http_headers"]["User-Agent"], backends.UA)
+        self.assertNotIn("Referer", opts["http_headers"])
+        self.assertEqual(opts["merge_output_format"], "mp4")
+        self.assertFalse(opts["hls_use_mpegts"])
+        self.assertTrue(opts["quiet"])
+        self.assertTrue(opts["no_warnings"])
+        self.assertTrue(opts["noplaylist"])
+        # robustness knobs present
+        self.assertGreaterEqual(opts["retries"], 1)
+        self.assertGreaterEqual(opts["fragment_retries"], 1)
+
+    def test_opts_preserve_part_headers_including_referer(self):
+        part = scraper.Part(
+            name="hls",
+            url="https://cdn/x.m3u8",
+            headers={"Referer": "https://flow/player", "User-Agent": "custom-UA"},
+        )
+        opts = scraper._ydl_opts(part, "/scratch/out.%(ext)s")
+        self.assertEqual(opts["http_headers"]["Referer"], "https://flow/player")
+        # part headers override the default UA (matches old {**BROWSER_HEADERS, **part.headers})
+        self.assertEqual(opts["http_headers"]["User-Agent"], "custom-UA")
+
+
 class BackendHelperTests(unittest.TestCase):
     def test_iframe_embed_and_link_discovery_tolerates_attribute_variants(self):
         html = """
