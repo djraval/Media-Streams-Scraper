@@ -735,6 +735,52 @@ class FallbackTests(unittest.TestCase):
             self.assertFalse(success)
             self.assertEqual(msg, "no backend")
 
+    def test_non_downloaderror_propagates_without_fallback(self):
+        # Spec: only DownloadError triggers backend fallback. A muxing/promote
+        # failure (e.g. RuntimeError from ffmpeg) must propagate and fail the
+        # episode loudly, NOT silently advance to the next backend.
+        second_tried = []
+
+        async def fake_iter_sources(client, show, d):
+            yield scraper.Source(
+                parts=[scraper.Part(name="p", url="https://a/x.mp4")],
+                kind="mp4", quality="720p", backend="hubref",
+            )
+            yield scraper.Source(
+                parts=[scraper.Part(name="p", url="https://b/x.mp4")],
+                kind="mp4", quality="480p", backend="desitvbox",
+            )
+
+        def ydl(part, dest_stem):
+            if part.url == "https://b/x.mp4":
+                second_tried.append(part.url)
+            p = dest_stem.parent / (dest_stem.name + ".mp4")
+            p.write_bytes(b"x")
+            return p
+
+        def boom_promote(src, out):
+            raise RuntimeError("ffmpeg/promote exploded")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "out"; out_dir.mkdir()
+            scratch = out_dir / ".scratch" / "run-1"; scratch.mkdir(parents=True)
+            with (
+                patch.object(scraper, "iter_sources", fake_iter_sources),
+                patch.object(scraper, "ydl_download", ydl),
+                patch.object(scraper, "promote_to_output", boom_promote),
+                patch("sys.stderr", io.StringIO()),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "exploded"):
+                    asyncio.run(
+                        scraper.process_episode(
+                            object(), {"title": "Anupamaa"},
+                            date(2026, 6, 14), out_dir, scratch,
+                        )
+                    )
+            # the second backend must NOT have been attempted
+            self.assertEqual(second_tried, [])
+
 
 class FfmpegTests(unittest.TestCase):
     def test_ffmpeg_failure_reports_tail_of_stderr(self):

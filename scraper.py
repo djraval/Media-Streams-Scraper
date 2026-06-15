@@ -13,7 +13,8 @@ files and keep the last N days filled. No external state.
 
 Add a show:    append a dict entry to SHOWS.
 Add a backend: write `async fn(client, show, date) -> Source | None` in
-               backends.py and append it to BACKENDS. First non-None wins.
+               backends.py and append it to BACKENDS. Backends are tried in
+               order; the first one that downloads successfully wins.
 
 Usage:
   uv run scraper.py [--show NAME] [--out PATH] [--days N] [--probe YYYY-MM-DD]
