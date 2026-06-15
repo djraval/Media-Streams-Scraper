@@ -158,6 +158,29 @@ def scratch_part_path(scratch: Path, d: date, part_number: int) -> Path:
     return scratch / f"{d.isoformat()}-part{part_number:02d}.mp4"
 
 
+class _YdlLogger:
+    """Route yt-dlp output to stderr. debug/info are dropped to stay terse;
+    warnings and errors are surfaced (prefixed so they are recognizable)."""
+
+    def debug(self, msg: str) -> None:        # yt-dlp sends info here too
+        pass
+
+    def info(self, msg: str) -> None:
+        pass
+
+    def warning(self, msg: str) -> None:
+        print(f"  yt-dlp: {msg}", file=sys.stderr)
+
+    def error(self, msg: str) -> None:
+        print(f"  yt-dlp: {msg}", file=sys.stderr)
+
+
+def _progress_hook(d: dict) -> None:
+    if d.get("status") == "finished":
+        name = d.get("filename", "")
+        print(f"  fetched {name}", file=sys.stderr)
+
+
 # --- Download + materialize -----------------------------------------------
 
 CHUNK = 1 << 20

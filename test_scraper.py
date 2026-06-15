@@ -42,6 +42,23 @@ class FakeClient:
         return response() if callable(response) else response
 
 
+class YdlLoggerTests(unittest.TestCase):
+    def test_logger_routes_warning_and_error_to_stderr(self):
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            logger = scraper._YdlLogger()
+            logger.debug("[debug] noisy internal line")
+            logger.info("informational line")
+            logger.warning("a warning")
+            logger.error("a hard error")
+        out = stderr.getvalue()
+        self.assertIn("a warning", out)
+        self.assertIn("a hard error", out)
+        # debug/info are suppressed to keep output terse
+        self.assertNotIn("noisy internal line", out)
+        self.assertNotIn("informational line", out)
+
+
 class BackendHelperTests(unittest.TestCase):
     def test_iframe_embed_and_link_discovery_tolerates_attribute_variants(self):
         html = """
