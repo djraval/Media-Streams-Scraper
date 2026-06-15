@@ -210,6 +210,24 @@ def _ydl_opts(part: Part, outtmpl: str) -> dict:
     }
 
 
+def ydl_download(part: Part, dest_stem: Path) -> Path:
+    """Download one part with yt-dlp into <dest_stem>.<ext-chosen-by-yt-dlp>,
+    then return the file that was actually produced.
+
+    Synchronous (yt-dlp blocks); call from async code via asyncio.to_thread.
+    Raises DownloadError on failure or if no output file appears.
+    """
+    outtmpl = str(dest_stem) + ".%(ext)s"
+    with yt_dlp.YoutubeDL(_ydl_opts(part, outtmpl)) as ydl:
+        ydl.download([part.url])
+    produced = sorted(dest_stem.parent.glob(dest_stem.name + ".*"))
+    # ignore any stray .partial/.ytdl/.part leftovers; want the finished file
+    produced = [p for p in produced if p.suffix not in (".partial", ".part", ".ytdl")]
+    if not produced:
+        raise DownloadError(f"yt-dlp produced no file for {part.url}")
+    return produced[0]
+
+
 # --- Download + materialize -----------------------------------------------
 
 CHUNK = 1 << 20

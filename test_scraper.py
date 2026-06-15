@@ -127,6 +127,72 @@ class YdlOptsTests(unittest.TestCase):
         self.assertEqual(opts["http_headers"]["User-Agent"], "custom-UA")
 
 
+class YdlDownloadTests(unittest.TestCase):
+    def test_returns_the_file_yt_dlp_produced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = Path(tmp)
+            stem = scratch / "2026-06-14-part01"
+
+            class FakeYDL:
+                def __init__(self, opts): self.opts = opts
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def download(self, urls):
+                    # yt-dlp owns the extension; simulate it choosing .mp4
+                    (stem.parent / (stem.name + ".mp4")).write_bytes(b"video")
+                    return 0
+
+            part = scraper.Part(name="p1", url="https://cdn/x.mp4")
+            with patch.object(scraper.yt_dlp, "YoutubeDL", FakeYDL):
+                produced = scraper.ydl_download(part, stem)
+            self.assertEqual(produced, stem.parent / "2026-06-14-part01.mp4")
+            self.assertEqual(produced.read_bytes(), b"video")
+
+    def test_raises_downloaderror_when_no_file_produced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = Path(tmp)
+            stem = scratch / "2026-06-14-part01"
+
+            class FakeYDL:
+                def __init__(self, opts): pass
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def download(self, urls): return 0  # writes nothing
+
+            part = scraper.Part(name="p1", url="https://cdn/x.mp4")
+            with patch.object(scraper.yt_dlp, "YoutubeDL", FakeYDL):
+                with self.assertRaises(scraper.DownloadError):
+                    scraper.ydl_download(part, stem)
+
+    def test_passes_outtmpl_and_headers_to_yt_dlp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = Path(tmp)
+            stem = scratch / "2026-06-14-part01"
+            captured = {}
+
+            class FakeYDL:
+                def __init__(self, opts): captured["opts"] = opts
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def download(self, urls):
+                    captured["urls"] = urls
+                    (stem.parent / (stem.name + ".mp4")).write_bytes(b"v")
+                    return 0
+
+            part = scraper.Part(
+                name="p1", url="https://cdn/x.m3u8",
+                headers={"Referer": "https://flow"},
+            )
+            with patch.object(scraper.yt_dlp, "YoutubeDL", FakeYDL):
+                scraper.ydl_download(part, stem)
+            self.assertEqual(captured["urls"], ["https://cdn/x.m3u8"])
+            self.assertTrue(captured["opts"]["outtmpl"].endswith(".%(ext)s"))
+            self.assertIn("2026-06-14-part01", captured["opts"]["outtmpl"])
+            self.assertEqual(
+                captured["opts"]["http_headers"]["Referer"], "https://flow"
+            )
+
+
 class BackendHelperTests(unittest.TestCase):
     def test_iframe_embed_and_link_discovery_tolerates_attribute_variants(self):
         html = """
