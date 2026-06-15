@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["httpx"]
+# dependencies = ["httpx", "yt-dlp"]
 # ///
 """daily-soap-scraper - download daily Hindi-serial episodes.
 
@@ -34,6 +34,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
+import yt_dlp
+from yt_dlp.utils import DownloadError
 
 # Backends, the helpers they use, and the Part/Source shapes all live in
 # backends.py. Re-imported here for the CLI and for older local scripts that
@@ -43,10 +45,11 @@ from backends import (
     BROWSER_HEADERS,
     Part,
     Source,
+    UA,
     desitvbox_backend,
     hubref_backend,
+    iter_sources,
     probe,
-    resolve,
     unpack,
     yadisk_resolve,
     yodesi_backend,
