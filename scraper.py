@@ -236,27 +236,6 @@ def ydl_download(part: Part, dest_stem: Path) -> Path:
 
 # --- Download + materialize -----------------------------------------------
 
-CHUNK = 1 << 20
-
-
-async def stream_to_file(
-    client: httpx.AsyncClient, part: Part, dest: Path
-) -> Path:
-    tmp = dest.with_suffix(dest.suffix + ".partial")
-    hdrs = {**BROWSER_HEADERS, **part.headers}
-    try:
-        async with client.stream("GET", part.url, headers=hdrs, timeout=None) as r:
-            r.raise_for_status()
-            with tmp.open("wb") as f:
-                async for chunk in r.aiter_bytes(CHUNK):
-                    f.write(chunk)
-        tmp.replace(dest)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-    return dest
-
-
 def promote_to_output(src: Path, out: Path) -> None:
     tmp = out.with_suffix(out.suffix + ".partial")
     tmp.unlink(missing_ok=True)
@@ -314,17 +293,6 @@ def ffmpeg_concat(parts: list[Path], out: Path) -> None:
         )
     finally:
         listfile.unlink(missing_ok=True)
-
-
-def ffmpeg_hls(part: Part, out: Path) -> None:
-    cmd = ["ffmpeg", "-y"]
-    if part.headers:
-        cmd += [
-            "-headers",
-            "".join(f"{k}: {v}\r\n" for k, v in part.headers.items()),
-        ]
-    cmd += ["-i", part.url, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-f", "mp4"]
-    _ffmpeg_run(cmd, out)
 
 
 async def download_source(
