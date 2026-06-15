@@ -192,6 +192,36 @@ class YdlDownloadTests(unittest.TestCase):
                 captured["opts"]["http_headers"]["Referer"], "https://flow"
             )
 
+    def test_clears_stale_files_before_downloading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = Path(tmp)
+            stem = scratch / "2026-06-14-part01"
+            # Simulate leftovers from a previous failed attempt on the same stem:
+            (scratch / "2026-06-14-part01.mp4").write_bytes(b"STALE")
+            (scratch / "2026-06-14-part01.mp4.part").write_bytes(b"partial")
+
+            saw_before = {}
+
+            class FakeYDL:
+                def __init__(self, opts): pass
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+                def download(self, urls):
+                    # capture what files exist at download time (post-cleanup)
+                    saw_before["files"] = sorted(
+                        p.name for p in stem.parent.glob(stem.name + ".*")
+                    )
+                    (stem.parent / (stem.name + ".mp4")).write_bytes(b"FRESH")
+                    return 0
+
+            part = scraper.Part(name="p1", url="https://cdn/x.mp4")
+            with patch.object(scraper.yt_dlp, "YoutubeDL", FakeYDL):
+                produced = scraper.ydl_download(part, stem)
+            # stale files were cleared BEFORE yt-dlp ran
+            self.assertEqual(saw_before["files"], [])
+            # result is the fresh download, not the stale leftover
+            self.assertEqual(produced.read_bytes(), b"FRESH")
+
 
 class BackendHelperTests(unittest.TestCase):
     def test_iframe_embed_and_link_discovery_tolerates_attribute_variants(self):

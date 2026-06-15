@@ -216,7 +216,13 @@ def ydl_download(part: Part, dest_stem: Path) -> Path:
 
     Synchronous (yt-dlp blocks); call from async code via asyncio.to_thread.
     Raises DownloadError on failure or if no output file appears.
+
+    Any pre-existing files matching the stem are removed first so a retry
+    after a failed attempt (e.g. backend fallback reusing the same stem)
+    never resumes or returns another attempt's leftovers.
     """
+    for stale in dest_stem.parent.glob(dest_stem.name + ".*"):
+        stale.unlink(missing_ok=True)
     outtmpl = str(dest_stem) + ".%(ext)s"
     with yt_dlp.YoutubeDL(_ydl_opts(part, outtmpl)) as ydl:
         ydl.download([part.url])
@@ -326,7 +332,12 @@ async def download_source(
 ) -> None:
     """Download every part of one source with yt-dlp, then materialize `out`:
     single part -> atomic promote; multiple parts -> ffmpeg concat.
-    Raises DownloadError if any part fails (caller falls back to next source).
+
+    Propagates DownloadError if a part fails to download (the caller treats
+    that as a signal to fall back to the next backend). A muxing/promote
+    failure (RuntimeError from ffmpeg_concat, OSError from promote_to_output)
+    also propagates but is intentionally NOT a fallback trigger: it fails the
+    episode rather than masking a likely-bad source.
     """
     downloaded: list[Path] = []
     try:
