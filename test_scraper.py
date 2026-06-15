@@ -59,6 +59,45 @@ class YdlLoggerTests(unittest.TestCase):
         self.assertNotIn("informational line", out)
 
 
+class IterSourcesTests(unittest.TestCase):
+    def _src(self, backend, quality="720p"):
+        return backends.Source(
+            parts=[backends.Part(name="p", url="u")],
+            kind="mp4", quality=quality, backend=backend,
+        )
+
+    def test_yields_each_resolving_backend_in_priority_order(self):
+        async def b_hub(client, show, d):  return self._src("hubref")
+        async def b_yod(client, show, d):  return None
+        async def b_dtb(client, show, d):  return self._src("desitvbox", "480p")
+
+        async def collect():
+            got = []
+            with patch.object(backends, "BACKENDS", [b_hub, b_yod, b_dtb]):
+                async for s in backends.iter_sources(object(), {"title": "X"}, date(2026, 6, 14)):
+                    got.append(s.backend)
+            return got
+
+        with patch("sys.stderr", io.StringIO()):
+            order = asyncio.run(collect())
+        self.assertEqual(order, ["hubref", "desitvbox"])
+
+    def test_crashing_backend_is_skipped(self):
+        async def b_boom(client, show, d):  raise RuntimeError("boom")
+        async def b_ok(client, show, d):    return self._src("yodesi")
+
+        async def collect():
+            got = []
+            with patch.object(backends, "BACKENDS", [b_boom, b_ok]):
+                async for s in backends.iter_sources(object(), {"title": "X"}, date(2026, 6, 14)):
+                    got.append(s.backend)
+            return got
+
+        with patch("sys.stderr", io.StringIO()):
+            order = asyncio.run(collect())
+        self.assertEqual(order, ["yodesi"])
+
+
 class BackendHelperTests(unittest.TestCase):
     def test_iframe_embed_and_link_discovery_tolerates_attribute_variants(self):
         html = """
