@@ -563,3 +563,155 @@ function resolveTvarticlePage(viddUrl, options) {
       return null;
     });
 }
+
+function resolveDesiSerials(request, options) {
+  options = options || {};
+  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  const seenEpisodes = new Set();
+  const seenBackends = new Set();
+  const seenStreams = new Set();
+  const streams = [];
+  const archiveUrls = buildCandidateUrls(request).desiSerials;
+
+  function processArchive(index) {
+    if (index >= archiveUrls.length) {
+      return Promise.resolve(streams);
+    }
+    return fetchText(fetchImpl, archiveUrls[index], { headers: BROWSER_HEADERS })
+      .then(function (archive) {
+        if (!archive) {
+          return processArchive(index + 1);
+        }
+        const episodeUrls = episodePageCandidates(archive, request);
+        return processEpisodes(episodeUrls, 0);
+      })
+      .then(function () {
+        if (streams.length > 0) {
+          streams.sort(function (left, right) {
+            const leftRank = left.backend === "vkprime" ? -1 : 1;
+            const rightRank = right.backend === "vkprime" ? -1 : 1;
+            return leftRank - rightRank;
+          });
+          return streams;
+        }
+        return processArchive(index + 1);
+      });
+  }
+
+  function processEpisodes(episodeUrls, index) {
+    if (index >= episodeUrls.length) {
+      return Promise.resolve();
+    }
+    const episodeUrl = episodeUrls[index];
+    if (seenEpisodes.has(episodeUrl)) {
+      return processEpisodes(episodeUrls, index + 1);
+    }
+    seenEpisodes.add(episodeUrl);
+    return fetchText(fetchImpl, episodeUrl, { headers: BROWSER_HEADERS })
+      .then(function (episode) {
+        if (!episode) {
+          return processEpisodes(episodeUrls, index + 1);
+        }
+        const viddUrls = tvarticlesLinks(episode);
+        return processViddUrls(viddUrls, 0);
+      })
+      .then(function () {
+        return processEpisodes(episodeUrls, index + 1);
+      });
+  }
+
+  function processViddUrls(viddUrls, index) {
+    if (index >= viddUrls.length) {
+      return Promise.resolve();
+    }
+    return resolveTvarticlePage(viddUrls[index], { fetchImpl: fetchImpl, request: request })
+      .then(function (stream) {
+        if (stream && !seenBackends.has(stream.backend) && !seenStreams.has(stream.url)) {
+          seenBackends.add(stream.backend);
+          seenStreams.add(stream.url);
+          streams.push(stream);
+        }
+        return processViddUrls(viddUrls, index + 1);
+      });
+  }
+
+  return processArchive(0);
+}
+
+function displayBackend(backend) {
+  return String(backend || "source")
+    .replace(/(^|[-_\s]+)([a-z])/g, function (_match, prefix, ch) { return prefix + ch.toUpperCase(); })
+    .replace(/[-_]+/g, "");
+}
+
+function episodeLabel(request) {
+  const season = String(request.season || 0).padStart(2, "0");
+  const episode = String(request.episode || 0).padStart(2, "0");
+  const parts = [request.title + " S" + season + "E" + episode];
+  const episodeTitle = String(request.episodeTitle || "").trim();
+  if (episodeTitle && !new RegExp("^episode\\s+" + request.episode + "$", "i").test(episodeTitle)) {
+    parts.push(episodeTitle);
+  }
+  if (request.runtimeMinutes) {
+    parts.push(request.runtimeMinutes + "m");
+  }
+  return parts.join(" - ");
+}
+
+function toNuvioStream(request, stream) {
+  return {
+    name: "Desi-Serials.to " + displayBackend(stream.backend),
+    title: episodeLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase(),
+    url: stream.url,
+    quality: stream.quality,
+    size: stream.size || "",
+    headers: stream.headers || {},
+  };
+}
+
+function getStreamsForRequest(request, options) {
+  options = options || {};
+  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  const seen = new Set();
+  const streams = [];
+  return resolveDesiSerials(request, { fetchImpl: fetchImpl })
+    .then(function (resolved) {
+      for (const stream of resolved) {
+        if (!stream || !stream.url || seen.has(stream.url)) {
+          continue;
+        }
+        seen.add(stream.url);
+        streams.push(toNuvioStream(request, stream));
+      }
+      return streams;
+    })
+    .catch(function (error) {
+      console.log("[Desi-Serials.to] resolver failed: " + error.message);
+      return streams;
+    });
+}
+
+function getStreams(tmdbId, mediaType, season, episode) {
+  if (mediaType !== "tv") {
+    return Promise.resolve([]);
+  }
+  return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY })
+    .then(function (request) {
+      return getStreamsForRequest(request, { fetchImpl: (typeof fetch !== "undefined" ? fetch : null) });
+    })
+    .catch(function (error) {
+      console.log("[Desi-Serials.to] getStreams failed: " + error.message);
+      return [];
+    });
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    getStreams: getStreams,
+    getStreamsForRequest: getStreamsForRequest,
+    buildMediaRequest: buildMediaRequest,
+    resolveDesiSerials: resolveDesiSerials,
+  };
+} else {
+  global.getStreams = getStreams;
+}
