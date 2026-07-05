@@ -1,0 +1,22 @@
+{
+  "name": "Desi-Serials Repo",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "desi-serials-to",
+      "name": "Desi-Serials.to",
+      "description": "Indian TV serial resolver using desi-serials.to episode pages plus VkPrime and Flow players.",
+      "version": "1.0.0",
+      "author": "djraval",
+      "supportedTypes": ["tv"],
+      "filename": "providers/desi-serials-to.js?v=1",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": ["hi", "en"],
+      "formats": ["mp4", "hls"],
+      "limited": true,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    }
+  ]
+}
