@@ -362,3 +362,204 @@ function buildCandidateUrls(request) {
   }
   return { desiSerials: dedupe(urls) };
 }
+
+function fetchText(fetchImpl, url, options) {
+  return fetchImpl(url, options || {})
+    .then(function (response) {
+      if (!response || response.ok === false) {
+        return null;
+      }
+      return response.text();
+    })
+    .catch(function () { return null; });
+}
+
+function episodePageCandidates(markup, request) {
+  const dateSlug = episodeDateSlug(request.airDate);
+  if (!dateSlug) {
+    return [];
+  }
+  return dedupe(
+    links(markup).filter(function (href) {
+      if (!DESI_SERIALS_HOST_RE.test(href)) {
+        return false;
+      }
+      if (!href.toLowerCase().includes(dateSlug)) {
+        return false;
+      }
+      return (request.slugCandidates || []).some(function (slug) {
+        return href.toLowerCase().includes(slug);
+      });
+    }),
+  );
+}
+
+function tvarticlesLinks(markup) {
+  return dedupe(links(markup).filter(function (href) {
+    return TVARTICLES_RE.test(href);
+  }));
+}
+
+function firstIframe(markup) {
+  return iframes(markup).find(function (href) {
+    return VKPRIME_RE.test(href) || FLOW_RE.test(href);
+  }) || "";
+}
+
+function qualityNearUrl(text, url) {
+  const index = text.indexOf(url);
+  if (index === -1) {
+    return null;
+  }
+  const after = text.slice(index, index + url.length + 160);
+  const afterMatch = after.match(/\b(?:label|quality|res|resolution)['"]?\s*[:=]\s*['"]?(\d{3,4})p?\b/i)
+    || after.match(/\b(\d{3,4})p\b/i);
+  if (afterMatch) {
+    return Number(afterMatch[1]);
+  }
+  const before = text.slice(Math.max(0, index - 160), index);
+  const matches = [
+    ...before.matchAll(/\b(?:label|quality|res|resolution)['"]?\s*[:=]\s*['"]?(\d{3,4})p?\b/gi),
+    ...before.matchAll(/\b(\d{3,4})p\b/gi),
+  ];
+  if (matches.length === 0) {
+    return null;
+  }
+  return Number(matches[matches.length - 1][1]);
+}
+
+function rankedMp4Candidates(raw) {
+  const text = decodeText(raw);
+  return mp4Candidates(text)
+    .map(function (url) { return { url: url, quality: qualityNearUrl(text, url) || 0 }; })
+    .sort(function (a, b) { return b.quality - a.quality; });
+}
+
+function hlsQualityFromManifest(raw) {
+  const match = String(raw || "").match(/RESOLUTION=\d+x(\d{3,4})/i);
+  return match ? match[1] + "p" : "unknown";
+}
+
+function hlsBandwidth(raw) {
+  const match = String(raw || "").match(/BANDWIDTH=(\d+)/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function mp4QualityLabel(height) {
+  if (!height) {
+    return "unknown";
+  }
+  return height < 480 ? "unknown" : height + "p";
+}
+
+function parsedDurationSeconds(raw) {
+  const match = String(raw || "").match(/\bduration['"]?\s*[:=]\s*['"]?(\d+(?:\.\d+)?)/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function durationSecondsFromRequest(request) {
+  const minutes = Number((request && request.runtimeMinutes) || 0);
+  return Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes * 60) : 0;
+}
+
+function estimatedHlsSize(bandwidthBitsPerSecond, durationSeconds) {
+  if (!bandwidthBitsPerSecond || !durationSeconds) {
+    return "";
+  }
+  return formatBytes((bandwidthBitsPerSecond * durationSeconds) / 8);
+}
+
+function fetchContentLength(fetchImpl, url, headers) {
+  return fetchImpl(url, { method: "HEAD", headers: headers })
+    .then(function (response) {
+      if (!response || response.ok === false || !response.headers || typeof response.headers.get !== "function") {
+        return 0;
+      }
+      return Number(response.headers.get("content-length") || 0) || 0;
+    })
+    .catch(function () { return 0; });
+}
+
+function resolveVkprimePlayer(embedUrl, refererUrl, options) {
+  options = options || {};
+  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  return fetchText(fetchImpl, embedUrl, {
+    headers: Object.assign({}, BROWSER_HEADERS, { Referer: refererUrl }),
+  })
+    .then(function (player) {
+      if (!player) {
+        return null;
+      }
+      const payload = [player, unpack(player)].filter(Boolean).join("\n");
+      const ranked = rankedMp4Candidates(payload);
+      if (ranked.length === 0) {
+        return null;
+      }
+      const best = ranked[0];
+      const headers = { Referer: embedUrl, "User-Agent": UA };
+      return fetchContentLength(fetchImpl, best.url, headers).then(function (contentLength) {
+        return {
+          backend: "vkprime",
+          kind: "mp4",
+          quality: mp4QualityLabel(best.quality),
+          url: best.url,
+          size: formatBytes(contentLength),
+          durationSeconds: parsedDurationSeconds(payload) || durationSecondsFromRequest(options.request),
+          headers: headers,
+        };
+      });
+    });
+}
+
+function resolveFlowPlayer(playerUrl, refererUrl, options) {
+  options = options || {};
+  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  return fetchText(fetchImpl, playerUrl, {
+    headers: Object.assign({}, BROWSER_HEADERS, { Referer: refererUrl }),
+  })
+    .then(function (player) {
+      if (!player) {
+        return null;
+      }
+      const masterUrl = m3u8Candidates(player)[0];
+      if (!masterUrl) {
+        return null;
+      }
+      return fetchText(fetchImpl, masterUrl, {
+        headers: Object.assign({}, BROWSER_HEADERS, { Referer: playerUrl }),
+      }).then(function (manifest) {
+        const durationSeconds = durationSecondsFromRequest(options.request);
+        return {
+          backend: "flow",
+          kind: "hls",
+          quality: hlsQualityFromManifest(manifest),
+          url: masterUrl,
+          size: estimatedHlsSize(hlsBandwidth(manifest), durationSeconds),
+          durationSeconds: durationSeconds,
+          headers: { Referer: playerUrl, "User-Agent": UA },
+        };
+      });
+    });
+}
+
+function resolveTvarticlePage(viddUrl, options) {
+  options = options || {};
+  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  return fetchText(fetchImpl, viddUrl, { headers: BROWSER_HEADERS })
+    .then(function (page) {
+      if (!page) {
+        return null;
+      }
+      const iframeUrl = firstIframe(page);
+      if (!iframeUrl) {
+        return null;
+      }
+      if (VKPRIME_RE.test(iframeUrl)) {
+        return resolveVkprimePlayer(iframeUrl, viddUrl, { fetchImpl: fetchImpl, request: options.request });
+      }
+      if (FLOW_RE.test(iframeUrl)) {
+        return resolveFlowPlayer(iframeUrl, viddUrl, { fetchImpl: fetchImpl, request: options.request });
+      }
+      return null;
+    });
+}
