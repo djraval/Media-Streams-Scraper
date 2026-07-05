@@ -291,3 +291,74 @@ function episodeDateSlug(isoDate) {
   const month = MONTHS[Number(match[2]) - 1];
   return `${day}${suffix}-${month}-${match[1]}`;
 }
+
+function fetchJson(fetchImpl, url) {
+  return fetchImpl(url).then(function (response) {
+    if (!response || response.ok === false) {
+      const status = response ? response.status : "unknown";
+      throw new Error("TMDB request failed: " + status);
+    }
+    return response.json();
+  });
+}
+
+function tmdbUrl(path, tmdbApiKey) {
+  const separator = path.includes("?") ? "&" : "?";
+  return TMDB_BASE + path + separator + "api_key=" + encodeURIComponent(tmdbApiKey);
+}
+
+function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
+  options = options || {};
+  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  const tmdbApiKey = options.tmdbApiKey;
+  if (!tmdbApiKey) {
+    return Promise.reject(new Error("TMDB API key is required"));
+  }
+  if (mediaType !== "tv") {
+    return Promise.reject(new Error("Desi-Serials.to supports tv episodes only"));
+  }
+  const FALLBACK_CHANNEL_SLUGS = dedupe(Object.values(CHANNEL_SLUGS).flat());
+  let tvInfo = null;
+  return fetchJson(fetchImpl, tmdbUrl("/tv/" + tmdbId, tmdbApiKey))
+    .then(function (tv) {
+      tvInfo = tv;
+      return fetchJson(
+        fetchImpl,
+        tmdbUrl("/tv/" + tmdbId + "/season/" + season + "/episode/" + episode, tmdbApiKey),
+      );
+    })
+    .then(function (ep) {
+      const title = tvInfo.name || tvInfo.original_name || "";
+      const networkCandidates = channelSlugCandidates(
+        (tvInfo.networks || []).map(function (network) { return network.name; }),
+      );
+      return {
+        title: title,
+        mediaType: mediaType,
+        season: season,
+        episode: episode,
+        airDate: ep.air_date || "",
+        episodeTitle: ep.name || "",
+        firstAirDate: tvInfo.first_air_date || "",
+        networkCandidates: networkCandidates,
+        runtimeMinutes: Number(ep.runtime || (tvInfo.episode_run_time && tvInfo.episode_run_time[0]) || 0) || null,
+        slugCandidates: requestSlugCandidates(title, season),
+        fallbackChannelSlugs: FALLBACK_CHANNEL_SLUGS,
+      };
+    });
+}
+
+function buildCandidateUrls(request) {
+  const channels = (request.networkCandidates && request.networkCandidates.length > 0)
+    ? request.networkCandidates
+    : request.fallbackChannelSlugs;
+  const urls = [];
+  for (const channel of channels) {
+    for (const slug of request.slugCandidates || []) {
+      urls.push("https://www.desi-serials.to/watch-online/" + channel + "/" + slug + "/");
+      urls.push("https://www.desi-serials.to/watch-online/" + channel + "/" + slug + "/page/2/");
+      urls.push("https://www.desi-serials.to/watch-online/" + channel + "/" + slug + "/page/3/");
+    }
+  }
+  return { desiSerials: dedupe(urls) };
+}
