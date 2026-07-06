@@ -478,15 +478,173 @@ function resolveVkPlayer(embedUrl, refererUrl, options) {
           quality: mp4QualityLabel(best.quality),
           url: best.url,
           size: formatBytes(contentLength),
+          duration: 0,
+          sourceTag: "",
           headers: headers,
         };
       });
     });
 }
 
+function resolveRelativeUrl(baseUrl, relative) {
+  try {
+    return new URL(relative, baseUrl).toString();
+  } catch (e) {
+    return relative;
+  }
+}
+
+function parseHlsMasterPlaylist(raw, baseUrl) {
+  var variants = [];
+  var lines = String(raw || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line.startsWith("#EXT-X-STREAM-INF:")) {
+      var resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
+      var avgBwMatch = line.match(/AVERAGE-BANDWIDTH=(\d+)/i);
+      var bwMatch = line.match(/BANDWIDTH=(\d+)/i);
+      var height = resMatch ? Number(resMatch[1]) : 0;
+      // Prefer AVERAGE-BANDWIDTH for size estimation (closer to actual bytes);
+      // fall back to BANDWIDTH (peak) if not present.
+      var bandwidth = avgBwMatch ? Number(avgBwMatch[1]) : (bwMatch ? Number(bwMatch[1]) : 0);
+      var urlLine = "";
+      for (var j = i + 1; j < lines.length; j++) {
+        var next = lines[j].trim();
+        if (next && !next.startsWith("#")) {
+          urlLine = next;
+          break;
+        }
+      }
+      if (urlLine) {
+        variants.push({
+          url: resolveRelativeUrl(baseUrl, urlLine),
+          height: height,
+          bandwidth: bandwidth,
+        });
+      }
+    }
+  }
+  variants.sort(function (a, b) {
+    return (b.height || b.bandwidth) - (a.height || a.bandwidth);
+  });
+  return variants;
+}
+
+function parseHlsMediaPlaylist(raw, baseUrl) {
+  var segments = [];
+  var totalDuration = 0;
+  var lines = String(raw || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line.startsWith("#EXTINF:")) {
+      var durMatch = line.match(/#EXTINF:([\d.]+)/i);
+      var duration = durMatch ? Number(durMatch[1]) : 0;
+      totalDuration += duration;
+      for (var j = i + 1; j < lines.length; j++) {
+        var next = lines[j].trim();
+        if (next && !next.startsWith("#")) {
+          segments.push({ url: resolveRelativeUrl(baseUrl, next), duration: duration });
+          break;
+        }
+      }
+    }
+  }
+  return { segments: segments, totalDuration: totalDuration };
+}
+
+function fetchSegmentSize(fetchImpl, url, headers) {
+  // parrot.tvlogy.to and similar CDN nodes reject HEAD on segment URLs
+  // (transport-level socket close), but accept GET with Range: bytes=0-0
+  // and return Content-Range with the total size.
+  var rangeHeaders = Object.assign({}, headers, { Range: "bytes=0-0" });
+  return fetchImpl(url, { method: "GET", headers: rangeHeaders })
+    .then(function (response) {
+      if (!response || response.ok === false) {
+        return 0;
+      }
+      var contentRange = (response.headers && response.headers.get("content-range")) || "";
+      var match = contentRange.match(/\/(\d+)$/);
+      if (match) {
+        // Drain the 1-byte body so the socket can be reused.
+        if (typeof response.arrayBuffer === "function") {
+          response.arrayBuffer().catch(function () {});
+        }
+        return Number(match[1]);
+      }
+      return Number((response.headers && response.headers.get("content-length")) || 0) || 0;
+    })
+    .catch(function () { return 0; });
+}
+
+function estimateHlsSize(fetchImpl, segments, headers, bandwidth, totalDuration) {
+  var count = segments.length;
+  // Bitrate-based fallback: bytes ~= bandwidth (bits/s) * duration (s) / 8
+  var bitrateEstimate = (bandwidth > 0 && totalDuration > 0)
+    ? Math.round((bandwidth * totalDuration) / 8)
+    : 0;
+
+  if (count === 0) {
+    return Promise.resolve(bitrateEstimate);
+  }
+  var sampleSize = Math.min(5, count);
+  var sampleUrls = [];
+  for (var i = 0; i < sampleSize; i++) {
+    var idx = Math.floor(i * count / sampleSize);
+    sampleUrls.push(segments[idx].url);
+  }
+  return Promise.all(
+    sampleUrls.map(function (url) {
+      return fetchSegmentSize(fetchImpl, url, headers);
+    }),
+  ).then(function (sizes) {
+    var valid = sizes.filter(function (s) { return s > 0; });
+    if (valid.length === 0) {
+      return bitrateEstimate;
+    }
+    var avg = valid.reduce(function (a, b) { return a + b; }, 0) / valid.length;
+    return Math.round(avg * count);
+  });
+}
+
+function flowVariantLabel(url) {
+  var match = String(url || "").match(/flow\.tvlogy\.to\/([a-z0-9]+)\//i);
+  if (!match) {
+    return "";
+  }
+  var variant = match[1].toLowerCase();
+  if (variant.indexOf("embed") === 0) {
+    return "embed";
+  }
+  if (variant.indexOf("plyr") === 0) {
+    return "plyr";
+  }
+  if (variant.indexOf("nflix") === 0) {
+    return "nflix";
+  }
+  return variant;
+}
+
+function formatDuration(seconds) {
+  var total = Math.round(Number(seconds) || 0);
+  if (total <= 0) {
+    return "";
+  }
+  var h = Math.floor(total / 3600);
+  var m = Math.floor((total % 3600) / 60);
+  var s = total % 60;
+  if (h > 0) {
+    return h + "h" + (m > 0 ? " " + m + "m" : "");
+  }
+  if (m > 0) {
+    return m + "m" + (s > 0 ? " " + s + "s" : "");
+  }
+  return s + "s";
+}
+
 function resolveFlowPlayer(playerUrl, refererUrl, options) {
   options = options || {};
   var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  var streamHeaders = { Referer: playerUrl, "User-Agent": UA };
   return fetchText(fetchImpl, playerUrl, {
     headers: Object.assign({}, BROWSER_HEADERS, { Referer: refererUrl }),
   })
@@ -506,14 +664,55 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
       return fetchText(fetchImpl, masterUrl, {
         headers: Object.assign({}, BROWSER_HEADERS, { Referer: playerUrl }),
       }).then(function (manifest) {
-        return {
-          backend: "flow",
-          kind: "hls",
-          quality: hlsQualityFromManifest(manifest),
-          url: masterUrl,
-          size: "",
-          headers: { Referer: playerUrl, "User-Agent": UA },
-        };
+        // If this is a master playlist, fetch the highest-quality variant
+        // to parse segment durations and estimate size.
+        var variants = parseHlsMasterPlaylist(manifest, masterUrl);
+        if (variants.length > 0) {
+          var best = variants[0];
+          var quality = best.height > 0 ? best.height + "p" : hlsQualityFromManifest(manifest);
+          return fetchText(fetchImpl, best.url, {
+            headers: Object.assign({}, BROWSER_HEADERS, { Referer: playerUrl }),
+          }).then(function (variantManifest) {
+            var media = parseHlsMediaPlaylist(variantManifest, best.url);
+            return estimateHlsSize(fetchImpl, media.segments, streamHeaders, best.bandwidth, media.totalDuration).then(function (estimatedSize) {
+              return {
+                backend: "flow",
+                kind: "hls",
+                quality: quality,
+                url: masterUrl,
+                size: formatBytes(estimatedSize),
+                duration: media.totalDuration,
+                sourceTag: flowVariantLabel(playerUrl),
+                headers: streamHeaders,
+              };
+            });
+          }).catch(function () {
+            return {
+              backend: "flow",
+              kind: "hls",
+              quality: quality,
+              url: masterUrl,
+              size: "",
+              duration: 0,
+              sourceTag: flowVariantLabel(playerUrl),
+              headers: streamHeaders,
+            };
+          });
+        }
+        // Direct media playlist (no master/variant layer)
+        var media = parseHlsMediaPlaylist(manifest, masterUrl);
+        return estimateHlsSize(fetchImpl, media.segments, streamHeaders, 0, media.totalDuration).then(function (estimatedSize) {
+          return {
+            backend: "flow",
+            kind: "hls",
+            quality: hlsQualityFromManifest(manifest),
+            url: masterUrl,
+            size: formatBytes(estimatedSize),
+            duration: media.totalDuration,
+            sourceTag: flowVariantLabel(playerUrl),
+            headers: streamHeaders,
+          };
+        });
       });
     });
 }
@@ -583,13 +782,17 @@ function resolveDesiSerials(request, options) {
               return resolveTvarticlesPage(url, { fetchImpl: fetchImpl });
             })
           ).then(function (resolved) {
-            // Filter nulls and deduplicate by stream URL.
+            // Filter nulls and deduplicate by (url, sourceTag) so that
+            // different Flow variants (embed/plyr/nflix) pointing at the
+            // same underlying HLS URL are kept as distinct streams.
             var seen = new Set();
             var streams = [];
             for (var i = 0; i < resolved.length; i++) {
               var stream = resolved[i];
-              if (stream && !seen.has(stream.url)) {
-                seen.add(stream.url);
+              if (!stream) { continue; }
+              var dedupeKey = stream.url + "\0" + (stream.sourceTag || "");
+              if (!seen.has(dedupeKey)) {
+                seen.add(dedupeKey);
                 streams.push(stream);
               }
             }
@@ -626,9 +829,18 @@ function episodeLabel(request) {
 }
 
 function toNuvioStream(request, stream) {
+  var name = "Desi-Serials.to " + displayBackend(stream.backend);
+  if (stream.sourceTag) {
+    name += " (" + stream.sourceTag + ")";
+  }
+  var title = episodeLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
+  var dur = formatDuration(stream.duration);
+  if (dur) {
+    title += " [" + dur + "]";
+  }
   return {
-    name: "Desi-Serials.to " + displayBackend(stream.backend),
-    title: episodeLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase(),
+    name: name,
+    title: title,
     url: stream.url,
     quality: stream.quality,
     size: stream.size || "",
@@ -644,10 +856,14 @@ function getStreamsForRequest(request, options) {
   return resolveDesiSerials(request, { fetchImpl: fetchImpl })
     .then(function (resolved) {
       for (const stream of resolved) {
-        if (!stream || !stream.url || seen.has(stream.url)) {
+        if (!stream || !stream.url) {
           continue;
         }
-        seen.add(stream.url);
+        const dedupeKey = stream.url + "\0" + (stream.sourceTag || "");
+        if (seen.has(dedupeKey)) {
+          continue;
+        }
+        seen.add(dedupeKey);
         streams.push(toNuvioStream(request, stream));
       }
       return streams;
