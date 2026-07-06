@@ -384,9 +384,9 @@ function tvarticlesLinks(markup) {
   }));
 }
 
-function firstIframe(markup) {
+function findPlayerIframe(markup) {
   return iframes(markup).find(function (href) {
-    return VKPRIME_RE.test(href) || FLOW_RE.test(href);
+    return VKPRIME_RE.test(href) || VKSPEED_RE.test(href) || FLOW_RE.test(href);
   }) || "";
 }
 
@@ -514,26 +514,27 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
     });
 }
 
-function resolveTvarticlePage(viddUrl, options) {
+function resolveTvarticlesPage(tvarticlesUrl, options) {
   options = options || {};
-  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
-  return fetchText(fetchImpl, viddUrl, { headers: BROWSER_HEADERS })
+  var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  return fetchText(fetchImpl, tvarticlesUrl, { headers: BROWSER_HEADERS })
     .then(function (page) {
       if (!page) {
         return null;
       }
-      const iframeUrl = firstIframe(page);
+      var iframeUrl = findPlayerIframe(page);
       if (!iframeUrl) {
         return null;
       }
-      if (VKPRIME_RE.test(iframeUrl)) {
-        return resolveVkprimePlayer(iframeUrl, viddUrl, { fetchImpl: fetchImpl });
+      if (VKPRIME_RE.test(iframeUrl) || VKSPEED_RE.test(iframeUrl)) {
+        return resolveVkPlayer(iframeUrl, tvarticlesUrl, { fetchImpl: fetchImpl });
       }
       if (FLOW_RE.test(iframeUrl)) {
-        return resolveFlowPlayer(iframeUrl, viddUrl, { fetchImpl: fetchImpl });
+        return resolveFlowPlayer(iframeUrl, tvarticlesUrl, { fetchImpl: fetchImpl });
       }
       return null;
-    });
+    })
+    .catch(function () { return null; });
 }
 
 function resolveDesiSerials(request, options) {
