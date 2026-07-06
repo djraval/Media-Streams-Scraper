@@ -420,8 +420,13 @@ function rankedMp4Candidates(raw) {
 }
 
 function hlsQualityFromManifest(raw) {
-  const match = String(raw || "").match(/RESOLUTION=\d+x(\d{3,4})/i);
-  return match ? match[1] + "p" : "unknown";
+  var matches = String(raw || "").matchAll(/RESOLUTION=\d+x(\d{3,4})/gi);
+  var max = 0;
+  for (var m of matches) {
+    var height = Number(m[1]);
+    if (height > max) { max = height; }
+  }
+  return max > 0 ? max + "p" : "unknown";
 }
 
 function mp4QualityLabel(height) {
@@ -489,13 +494,12 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
       if (!player) {
         return null;
       }
-      // Try direct m3u8 extraction first (works for plyr020A, nflix020A variants).
-      var masterUrl = m3u8Candidates(player)[0] || "";
-      // Fall back to JuicyCodes decode (needed for embed020A / Flash Player variant).
-      if (!masterUrl) {
-        var decoded = decodeJuicyCodes(player);
-        masterUrl = m3u8Candidates(decoded)[0] || "";
-      }
+      // Scan both direct HTML and JuicyCodes-decoded output for m3u8 URLs.
+      // Direct extraction works for plyr020A/nflix020A; JuicyCodes decode is
+      // needed for embed020A. Some pages may have both — collect all candidates.
+      var directCandidates = m3u8Candidates(player);
+      var decodedCandidates = m3u8Candidates(decodeJuicyCodes(player));
+      var masterUrl = (directCandidates[0] || decodedCandidates[0] || "");
       if (!masterUrl) {
         return null;
       }
