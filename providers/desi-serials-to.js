@@ -34,6 +34,12 @@ const DESI_SERIALS_HOST_RE = /^https:\/\/www\.desi-serials\.to\//i;
 const TVARTICLES_RE = /^https:\/\/tvarticles\.org\/vidd\.php\?id=\d+/i;
 const VKPRIME_RE = /^https:\/\/vkprime\.com\/embed-[A-Za-z0-9-]+\.html$/i;
 const FLOW_RE = /^https:\/\/flow\.tvlogy\.to\/[A-Za-z0-9/_-]+\/?$/i;
+const VKSPEED_RE = /^https:\/\/vkspeed\.com\/embed-[A-Za-z0-9-]+\.html$/i;
+
+function isPlaceholderUrl(url) {
+  var lower = String(url || "").toLowerCase();
+  return lower.indexOf("/ads/") !== -1 || lower.indexOf("127.0.0.1") !== -1;
+}
 
 function dedupe(values) {
   const seen = new Set();
@@ -165,6 +171,38 @@ function unpack(blob) {
     out = out.replace(new RegExp(`\\b${token}\\b`, "g"), keys[i]);
   }
   return out;
+}
+
+var B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function decodeBase64(raw) {
+  var input = String(raw || "").replace(/[^A-Za-z0-9+/]/g, "");
+  var output = "";
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < input.length; i++) {
+    var idx = B64_CHARS.indexOf(input.charAt(i));
+    if (idx === -1) { continue; }
+    buffer = (buffer << 6) | idx;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output += String.fromCharCode((buffer >> bits) & 0xff);
+    }
+  }
+  return output;
+}
+
+function decodeJuicyCodes(html) {
+  var match = String(html || "").match(/JuicyCodes\.Run\(([^)]+)\)/s);
+  if (!match) { return ""; }
+  var fragments = match[1].match(/"([^"]*)"|'([^']*)'/g);
+  if (!fragments) { return ""; }
+  var payload = "";
+  for (var i = 0; i < fragments.length; i++) {
+    payload += fragments[i].replace(/^["']|["']$/g, "");
+  }
+  return unpack(decodeBase64(payload));
 }
 
 function formatBytes(bytes) {
