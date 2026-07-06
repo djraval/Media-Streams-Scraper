@@ -481,7 +481,7 @@ function resolveVkPlayer(embedUrl, refererUrl, options) {
 
 function resolveFlowPlayer(playerUrl, refererUrl, options) {
   options = options || {};
-  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
   return fetchText(fetchImpl, playerUrl, {
     headers: Object.assign({}, BROWSER_HEADERS, { Referer: refererUrl }),
   })
@@ -489,7 +489,13 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
       if (!player) {
         return null;
       }
-      const masterUrl = m3u8Candidates(player)[0];
+      // Try direct m3u8 extraction first (works for plyr020A, nflix020A variants).
+      var masterUrl = m3u8Candidates(player)[0] || "";
+      // Fall back to JuicyCodes decode (needed for embed020A / Flash Player variant).
+      if (!masterUrl) {
+        var decoded = decodeJuicyCodes(player);
+        masterUrl = m3u8Candidates(decoded)[0] || "";
+      }
       if (!masterUrl) {
         return null;
       }
