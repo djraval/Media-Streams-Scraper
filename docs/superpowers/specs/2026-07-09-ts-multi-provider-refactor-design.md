@@ -59,12 +59,12 @@ Placeholder detection: vkprime and vkspeed serve a ~18 MB "Stay Tuned" MP4 at a 
 ```
 src/
   shared/
-    players.ts          ← resolveVkEmbed, resolveHlsEmbed, isPlaceholderUrl
-                          Stream and PlayerOptions interfaces
+    players.ts          ← resolveVkPlayerEmbed, resolveFlowPlayerEmbed, isPlaceholderUrl
+                          Stream interface
   desi-serials-to/
     index.ts            ← getStreams() entry point, toNuvioStream() — Nuvio contract
     desi-serials-to.ts  ← all site logic: TMDB lookup, URL building, page crawl,
-                          vidd link collection, parallel resolution
+                          tvarticles link collection, parallel resolution
 
 providers/
   desi-serials-to.js   ← esbuild output, committed
@@ -96,13 +96,13 @@ export interface Stream {
 
 // Handles vkprime.com and vkspeed.com (identical page structure).
 // Returns null if the page 404s, the MP4 is a placeholder, or no URL is found.
-export async function resolveVkEmbed(embedUrl: string, referer: string): Promise<Stream | null>
+export async function resolveVkPlayerEmbed(embedUrl: string, referer: string): Promise<Stream | null>
 
 // Handles all flow.tvlogy.to variants (embed020A, plyr020A, nflix020A).
 // Decodes obfuscation: JuicyCodes wraps a p,a,c,k packer in base64.
 // Pipeline: atob(payload) → unpack() → scan for .m3u8 URL.
 // Returns null on 403/404 or if no m3u8 is found.
-export async function resolveHlsEmbed(embedUrl: string, referer: string): Promise<Stream | null>
+export async function resolveFlowPlayerEmbed(embedUrl: string, referer: string): Promise<Stream | null>
 
 // True for URLs that are known placeholders (path contains /ads/ or host is 127.0.0.1).
 export function isPlaceholderUrl(url: string): boolean
@@ -116,7 +116,7 @@ in scrapers that need to classify iframes.
 All logic specific to this site. Exports one function:
 
 ```ts
-export async function resolveDesiSerials(request: MediaRequest): Promise<Stream[]>
+export async function resolveDesiSerials(metadata: EpisodeMetadata): Promise<Stream[]>
 ```
 
 Internally:
@@ -125,13 +125,13 @@ Internally:
 2. Fetches archive pages sequentially until one contains a matching episode link (matched
    by date slug + title slug in the href). Stops as soon as a match is found.
 3. Fetches the episode page, collects all `tvarticles.org/vidd.php?id=N` links.
-4. Fetches all vidd pages in **parallel** (`Promise.all`), extracts the iframe from each.
-5. Resolves all iframes in **parallel** (`Promise.all`) using `resolveVkEmbed` /
-   `resolveHlsEmbed` from `shared/players.ts`.
+4. Fetches all tvarticles pages in **parallel** (`Promise.all`), extracts the iframe from each.
+5. Resolves all iframes in **parallel** (`Promise.all`) using `resolveVkPlayerEmbed` /
+   `resolveFlowPlayerEmbed` from `shared/players.ts`.
 6. Filters nulls and deduplicates by stream URL. Returns the surviving streams.
 
 TMDB lookup (fetching tv + episode info to get title, air date, networks) is a
-`fetchMediaRequest` function defined in this file and exported for `index.ts` to call.
+`fetchEpisodeMetadata` function defined in this file and exported for `index.ts` to call.
 It is not a separate module — it's only ever used by this scraper.
 
 ### `src/desi-serials-to/index.ts`
@@ -147,7 +147,7 @@ export async function getStreams(
 ): Promise<NuvioStream[]>
 ```
 
-Calls `fetchMediaRequest` (TMDB), then `resolveDesiSerials`, then maps each `Stream` to the
+Calls `fetchEpisodeMetadata` (TMDB), then `resolveDesiSerials`, then maps each `Stream` to the
 Nuvio stream object shape via `toNuvioStream`. Wraps in try/catch, returns `[]` on failure.
 
 ---
@@ -155,7 +155,7 @@ Nuvio stream object shape via `toNuvioStream`. Wraps in try/catch, returns `[]` 
 ## Error handling
 
 - Network failures in `fetchText` return `null` (catch absorbed). Callers check for null.
-- `resolveVkEmbed` / `resolveHlsEmbed` return `null` on any failure. The `Promise.all` array
+- `resolveVkPlayerEmbed` / `resolveFlowPlayerEmbed` return `null` on any failure. The `Promise.all` array
   is filtered — one bad link never blocks the others.
 - `getStreams` wraps the entire pipeline in try/catch and returns `[]`, so Nuvio always gets
   a valid array.
@@ -178,8 +178,8 @@ npm run typecheck        # tsc --noEmit — type errors only, no emit
 | Current behaviour | New behaviour |
 |---|---|
 | Promise chains | async/await (esbuild transpiles for Hermes) |
-| Only resolves first matching vkprime or flow iframe | Resolves all 5 vidd links in parallel |
-| No vkspeed.com support | `resolveVkEmbed` handles vkprime + vkspeed |
+| Only resolves first matching vkprime or flow iframe | Resolves all 5 tvarticles links in parallel |
+| No vkspeed.com support | `resolveVkPlayerEmbed` handles vkprime + vkspeed |
 | `seenBackends` stops at one vkprime + one flow | Dedup by stream URL only |
 | No placeholder detection | `isPlaceholderUrl` filters `/ads/` and `127.0.0.1` |
 | Monolithic 633-line file | Split across 3 source files + shared module |
@@ -192,6 +192,6 @@ npm run typecheck        # tsc --noEmit — type errors only, no emit
 - TMDB lookup logic and request object shape
 - URL slug building (title normalisation, channel slug map, date slug)
 - Archive page crawl (sequential, stop when episode found)
-- `unpack` / `decodeText` / `mediaCandidates` helpers — same logic, typed
+- `unpack` / `decodeText` / `extractMediaUrls` helpers — same logic, typed
 - Nuvio stream object shape and `getStreams` signature
 - `manifest.json` — `filename` still points to `providers/desi-serials-to.js`

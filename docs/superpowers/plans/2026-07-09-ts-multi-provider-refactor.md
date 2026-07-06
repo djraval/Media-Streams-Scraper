@@ -17,14 +17,14 @@
 ```
 src/
   shared/
-    players.ts              ← resolveVkEmbed, resolveHlsEmbed, isPlaceholderUrl
+    players.ts              ← resolveVkPlayerEmbed, resolveFlowPlayerEmbed, isPlaceholderUrl
                               Stream interface, VKPRIME_RE, VKSPEED_RE, FLOW_RE
   desi-serials-to/
     index.ts                ← getStreams() entry point, toNuvioStream()
-    desi-serials-to.ts      ← fetchMediaRequest, resolveDesiSerials, all site logic
-                              helpers: dedupe, decodeText, mediaCandidates, attrValues,
-                              links, iframes, unpack, packerEncode, formatBytes,
-                              normalizeTitle, slugCandidates, channelSlugCandidates,
+    desi-serials-to.ts      ← fetchEpisodeMetadata, resolveDesiSerials, all site logic
+                              helpers: dedupe, decodeText, extractMediaUrls, extractAttrValues,
+                              extractLinks, extractIframes, unpack, packerEncode, formatBytes,
+                              normalizeTitle, buildTitleSlugCandidates, channelSlugCandidates,
                               episodeDateSlug, fetchText, fetchJson
 
 providers/
@@ -52,7 +52,8 @@ export interface Stream {
 }
 
 // src/desi-serials-to/desi-serials-to.ts
-export interface MediaRequest {
+// Episode metadata fetched from TMDB, used to build archive URLs and match episode pages.
+export interface EpisodeMetadata {
   title: string;
   mediaType: string;
   season: number;
@@ -292,7 +293,7 @@ into playable streams. No knowledge of any specific scraper site.
 JuicyCodes obfuscation (base64-wrapped p,a,c,k packer). It only works on plyr020A/nflix020A
 variants which expose `sources` JSON directly. The embed020A (Flash Player) variant wraps
 the player config in `JuicyCodes.Run("base64...")` which decodes to a packer. The new
-`resolveHlsEmbed` must handle both: try direct m3u8 extraction first, then fall back to
+`resolveFlowPlayerEmbed` must handle both: try direct m3u8 extraction first, then fall back to
 JuicyCodes decode (atob + unpack).
 
 - [ ] **Step 1: Create src/shared/players.ts with interfaces and regexes**
@@ -402,7 +403,7 @@ function dedupe<T>(values: T[]): T[] {
   return out;
 }
 
-function mediaCandidates(raw: string, extension: string): string[] {
+function extractMediaUrls(raw: string, extension: string): string[] {
   const text = decodeText(raw);
   const pattern = new RegExp(
     "https?://[^\\s'\\\"<>\\\\,}\\]]+\\." +
@@ -417,7 +418,7 @@ function mediaCandidates(raw: string, extension: string): string[] {
   );
 }
 
-function iframes(markup: string): string[] {
+function extractIframes(markup: string): string[] {
   const tagPattern = /<\s*iframe\b[^>]*>/gis;
   const attrPattern = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
   const values: string[] = [];
@@ -437,7 +438,7 @@ The p,a,c,k packer is used by flow.tvlogy.to to obfuscate player config. This is
 algorithm as the current scraper, ported to TypeScript.
 
 ```typescript
-// Add after iframes() in src/shared/players.ts
+// Add after extractIframes() in src/shared/players.ts
 
 function packerEncode(n: number, base: number): string {
   if (n === 0) return "0";
@@ -568,7 +569,7 @@ function hlsQualityFromManifest(raw: string): string {
 }
 ```
 
-- [ ] **Step 8: Add resolveVkEmbed (handles vkprime + vkspeed)**
+- [ ] **Step 8: Add resolveVkPlayerEmbed (handles vkprime + vkspeed)**
 
 VkPrime and VkSpeed have identical page structure: an embed HTML page containing a
 jwplayer setup with `file: "https://host/...mp4"`. The MP4 may be a placeholder under
@@ -578,7 +579,7 @@ for placeholder, fetch content-length for size display.
 ```typescript
 // Add after quality helpers in src/shared/players.ts
 
-export async function resolveVkEmbed(embedUrl: string, referer: string): Promise<Stream | null> {
+export async function resolveVkPlayerEmbed(embedUrl: string, referer: string): Promise<Stream | null> {
   const player = await fetchText(embedUrl, {
     ...BROWSER_HEADERS,
     Referer: referer,
@@ -587,7 +588,7 @@ export async function resolveVkEmbed(embedUrl: string, referer: string): Promise
 
   const payload = player + "\n" + unpack(player);
   const text = decodeText(payload);
-  const candidates = mediaCandidates(text, "mp4");
+  const candidates = extractMediaUrls(text, "mp4");
   if (candidates.length === 0) return null;
 
   // Rank by quality (nearest quality label in surrounding text)
@@ -613,16 +614,16 @@ export async function resolveVkEmbed(embedUrl: string, referer: string): Promise
 }
 ```
 
-- [ ] **Step 9: Add resolveHlsEmbed (handles all flow.tvlogy.to variants)**
+- [ ] **Step 9: Add resolveFlowPlayerEmbed (handles all flow.tvlogy.to variants)**
 
 Flow.tvlogy.to has three path variants: embed020A (JuicyCodes obfuscated), plyr020A
 (direct sources JSON), nflix020A (direct sources JSON). We try direct m3u8 extraction
 first (works for plyr/nflix), then fall back to JuicyCodes decode (needed for embed020A).
 
 ```typescript
-// Add after resolveVkEmbed in src/shared/players.ts
+// Add after resolveVkPlayerEmbed in src/shared/players.ts
 
-export async function resolveHlsEmbed(embedUrl: string, referer: string): Promise<Stream | null> {
+export async function resolveFlowPlayerEmbed(embedUrl: string, referer: string): Promise<Stream | null> {
   const player = await fetchText(embedUrl, {
     ...BROWSER_HEADERS,
     Referer: referer,
@@ -630,12 +631,12 @@ export async function resolveHlsEmbed(embedUrl: string, referer: string): Promis
   if (!player) return null;
 
   // Try direct m3u8 extraction (works for plyr020A, nflix020A)
-  let masterUrl = mediaCandidates(decodeText(player), "m3u8")[0] || "";
+  let masterUrl = extractMediaUrls(decodeText(player), "m3u8")[0] || "";
 
   // Fall back to JuicyCodes decode (needed for embed020A)
   if (!masterUrl) {
     const decoded = decodeJuicyCodes(player);
-    masterUrl = mediaCandidates(decodeText(decoded), "m3u8")[0] || "";
+    masterUrl = extractMediaUrls(decodeText(decoded), "m3u8")[0] || "";
   }
 
   if (!masterUrl) return null;
@@ -664,19 +665,19 @@ Scrapers need to classify an iframe URL to know which resolver to call. This hel
 returns the appropriate resolver or null.
 
 ```typescript
-// Add after resolveHlsEmbed in src/shared/players.ts
+// Add after resolveFlowPlayerEmbed in src/shared/players.ts
 
 export type PlayerResolver = (embedUrl: string, referer: string) => Promise<Stream | null>;
 
 export function resolverForIframe(iframeUrl: string): { backend: string; resolve: PlayerResolver } | null {
   if (VKPRIME_RE.test(iframeUrl)) {
-    return { backend: "vkprime", resolve: resolveVkEmbed };
+    return { backend: "vkprime", resolve: resolveVkPlayerEmbed };
   }
   if (VKSPEED_RE.test(iframeUrl)) {
-    return { backend: "vkspeed", resolve: resolveVkEmbed };
+    return { backend: "vkspeed", resolve: resolveVkPlayerEmbed };
   }
   if (FLOW_RE.test(iframeUrl)) {
-    return { backend: "flow", resolve: resolveHlsEmbed };
+    return { backend: "flow", resolve: resolveFlowPlayerEmbed };
   }
   return null;
 }
@@ -703,8 +704,8 @@ git commit -m "feat: add shared player resolvers with JuicyCodes + placeholder d
 - Create: `src/desi-serials-to/desi-serials-to.ts`
 
 This file contains all logic specific to desi-serials.to: TMDB lookup, URL slug building,
-archive page crawl, episode page parsing, vidd link collection, and parallel resolution
-of all player links. It exports `fetchMediaRequest` and `resolveDesiSerials`.
+archive page crawl, episode page parsing, tvarticles link collection, and parallel resolution
+of all player links. It exports `fetchEpisodeMetadata` and `resolveDesiSerials`.
 
 - [ ] **Step 1: Create file with constants and interfaces**
 
@@ -714,7 +715,7 @@ of all player links. It exports `fetchMediaRequest` and `resolveDesiSerials`.
 
 import { Stream, resolverForIframe, isPlaceholderUrl } from "../shared/players";
 
-export interface MediaRequest {
+export interface EpisodeMetadata {
   title: string;
   mediaType: string;
   season: number;
@@ -806,7 +807,7 @@ function slugCandidates(title: string): string[] {
   return dedupe(candidates);
 }
 
-function requestSlugCandidates(title: string, season: number): string[] {
+function buildTitleSlugCandidates(title: string, season: number): string[] {
   const candidates = slugCandidates(title);
   if (season > 1 && candidates.length > 0) {
     candidates.push(`${candidates[0]}-${season}`);
@@ -838,12 +839,12 @@ function episodeDateSlug(isoDate: string): string {
 }
 ```
 
-- [ ] **Step 3: Add HTML parsing helpers (links, attrValues)**
+- [ ] **Step 3: Add HTML parsing helpers (extractLinks, extractIframes)**
 
 ```typescript
 // Add after date slug helper in src/desi-serials-to/desi-serials-to.ts
 
-function attrValues(markup: string, tags: string[], attrs: string[]): string[] {
+function extractAttrValues(markup: string, tags: string[], attrs: string[]): string[] {
   const tagAlternation = tags.join("|");
   const attrAlternation = attrs.join("|");
   const tagPattern = new RegExp(`<\\s*(${tagAlternation})\\b[^>]*>`, "gis");
@@ -861,12 +862,12 @@ function attrValues(markup: string, tags: string[], attrs: string[]): string[] {
   return dedupe(values);
 }
 
-function links(markup: string): string[] {
-  return attrValues(markup, ["a", "link", "area"], ["href"]);
+function extractLinks(markup: string): string[] {
+  return extractAttrValues(markup, ["a", "link", "area"], ["href"]);
 }
 
-function iframes(markup: string): string[] {
-  return attrValues(markup, ["iframe"], ["src"]);
+function extractIframes(markup: string): string[] {
+  return extractAttrValues(markup, ["iframe"], ["src"]);
 }
 ```
 
@@ -900,17 +901,17 @@ function tmdbUrl(path: string, apiKey: string): string {
 }
 ```
 
-- [ ] **Step 5: Add fetchMediaRequest (TMDB lookup)**
+- [ ] **Step 5: Add fetchEpisodeMetadata (TMDB lookup)**
 
 ```typescript
 // Add after fetch helpers in src/desi-serials-to/desi-serials-to.ts
 
-export async function fetchMediaRequest(
+export async function fetchEpisodeMetadata(
   tmdbId: string,
   mediaType: string,
   season: number,
   episode: number,
-): Promise<MediaRequest> {
+): Promise<EpisodeMetadata> {
   if (mediaType !== "tv") {
     throw new Error("Desi-Serials.to supports tv episodes only");
   }
@@ -936,25 +937,25 @@ export async function fetchMediaRequest(
     networkCandidates,
     runtimeMinutes:
       Number(ep.runtime || (tvInfo.episode_run_time && tvInfo.episode_run_time[0]) || 0) || null,
-    slugCandidates: requestSlugCandidates(title, season),
+    slugCandidates: buildTitleSlugCandidates(title, season),
     fallbackChannelSlugs,
   };
 }
 ```
 
-- [ ] **Step 6: Add buildCandidateUrls (archive URL candidates)**
+- [ ] **Step 6: Add buildArchivePageUrls (archive URL candidates)**
 
 ```typescript
-// Add after fetchMediaRequest in src/desi-serials-to/desi-serials-to.ts
+// Add after fetchEpisodeMetadata in src/desi-serials-to/desi-serials-to.ts
 
-function buildCandidateUrls(request: MediaRequest): string[] {
+function buildArchivePageUrls(metadata: EpisodeMetadata): string[] {
   const channels =
-    request.networkCandidates.length > 0
-      ? request.networkCandidates
-      : request.fallbackChannelSlugs;
+    metadata.networkCandidates.length > 0
+      ? metadata.networkCandidates
+      : metadata.fallbackChannelSlugs;
   const urls: string[] = [];
   for (const channel of channels) {
-    for (const slug of request.slugCandidates) {
+    for (const slug of metadata.slugCandidates) {
       urls.push(`https://www.desi-serials.to/watch-online/${channel}/${slug}/`);
       urls.push(`https://www.desi-serials.to/watch-online/${channel}/${slug}/page/2/`);
       urls.push(`https://www.desi-serials.to/watch-online/${channel}/${slug}/page/3/`);
@@ -964,45 +965,45 @@ function buildCandidateUrls(request: MediaRequest): string[] {
 }
 ```
 
-- [ ] **Step 7: Add episodePageCandidates and tvarticlesLinks**
+- [ ] **Step 7: Add findEpisodePageLinks and extractTvarticlesLinks**
 
 ```typescript
-// Add after buildCandidateUrls in src/desi-serials-to/desi-serials-to.ts
+// Add after buildArchivePageUrls in src/desi-serials-to/desi-serials-to.ts
 
-function episodePageCandidates(markup: string, request: MediaRequest): string[] {
-  const dateSlug = episodeDateSlug(request.airDate);
+function findEpisodePageLinks(markup: string, metadata: EpisodeMetadata): string[] {
+  const dateSlug = episodeDateSlug(metadata.airDate);
   if (!dateSlug) return [];
   return dedupe(
-    links(markup).filter((href) => {
+    extractLinks(markup).filter((href) => {
       if (!DESI_SERIALS_HOST_RE.test(href)) return false;
       if (!href.toLowerCase().includes(dateSlug)) return false;
-      return (request.slugCandidates || []).some((slug) =>
+      return (metadata.slugCandidates || []).some((slug) =>
         href.toLowerCase().includes(slug),
       );
     }),
   );
 }
 
-function tvarticlesLinks(markup: string): string[] {
+function extractTvarticlesLinks(markup: string): string[] {
   return dedupe(
-    links(markup).filter((href) => TVARTICLES_RE.test(href)),
+    extractLinks(markup).filter((href) => TVARTICLES_RE.test(href)),
   );
 }
 ```
 
-- [ ] **Step 8: Add resolveViddLink (single vidd.php page → Stream | null)**
+- [ ] **Step 8: Add resolveTvarticlesPage (single tvarticles.org page → Stream | null)**
 
 This fetches a single tvarticles.org/vidd.php page, extracts the iframe, classifies it,
 and calls the appropriate resolver. Returns null on any failure.
 
 ```typescript
-// Add after tvarticlesLinks in src/desi-serials-to/desi-serials-to.ts
+// Add after extractTvarticlesLinks in src/desi-serials-to/desi-serials-to.ts
 
-async function resolveViddLink(viddUrl: string): Promise<Stream | null> {
-  const page = await fetchText(viddUrl, BROWSER_HEADERS);
+async function resolveTvarticlesPage(tvarticlesUrl: string): Promise<Stream | null> {
+  const page = await fetchText(tvarticlesUrl, BROWSER_HEADERS);
   if (!page) return null;
 
-  const iframeUrl = iframes(page).find(
+  const iframeUrl = extractIframes(page).find(
     (url) => resolverForIframe(url) !== null,
   );
   if (!iframeUrl) return null;
@@ -1010,7 +1011,7 @@ async function resolveViddLink(viddUrl: string): Promise<Stream | null> {
   const entry = resolverForIframe(iframeUrl);
   if (!entry) return null;
 
-  const stream = await entry.resolve(iframeUrl, viddUrl);
+  const stream = await entry.resolve(iframeUrl, tvarticlesUrl);
   if (!stream || isPlaceholderUrl(stream.url)) return null;
 
   return stream;
@@ -1020,34 +1021,34 @@ async function resolveViddLink(viddUrl: string): Promise<Stream | null> {
 - [ ] **Step 9: Add resolveDesiSerials (orchestrator with parallel fan-out)**
 
 This is the main pipeline. It crawls archive pages sequentially to find the episode page,
-collects all vidd links, then resolves them ALL in parallel via Promise.all.
+collects all tvarticles links, then resolves them ALL in parallel via Promise.all.
 
 ```typescript
-// Add after resolveViddLink in src/desi-serials-to/desi-serials-to.ts
+// Add after resolveTvarticlesPage in src/desi-serials-to/desi-serials-to.ts
 
-export async function resolveDesiSerials(request: MediaRequest): Promise<Stream[]> {
-  const archiveUrls = buildCandidateUrls(request);
+export async function resolveDesiSerials(metadata: EpisodeMetadata): Promise<Stream[]> {
+  const archiveUrls = buildArchivePageUrls(metadata);
 
   // Crawl archive pages sequentially until we find the episode page
   for (const archiveUrl of archiveUrls) {
     const archive = await fetchText(archiveUrl, BROWSER_HEADERS);
     if (!archive) continue;
 
-    const episodeUrls = episodePageCandidates(archive, request);
+    const episodeUrls = findEpisodePageLinks(archive, metadata);
     if (episodeUrls.length === 0) continue;
 
-    // Fetch all episode pages, collect all vidd links
+    // Fetch all episode pages, collect all tvarticles links
     const episodePages = await Promise.all(
       episodeUrls.map((url) => fetchText(url, BROWSER_HEADERS)),
     );
-    const allViddUrls = dedupe(
-      episodePages.flatMap((page) => (page ? tvarticlesLinks(page) : [])),
+    const allTvarticlesUrls = dedupe(
+      episodePages.flatMap((page) => (page ? extractTvarticlesLinks(page) : [])),
     );
-    if (allViddUrls.length === 0) continue;
+    if (allTvarticlesUrls.length === 0) continue;
 
-    // Resolve ALL vidd links in parallel
+    // Resolve ALL tvarticles links in parallel
     const resolved = await Promise.all(
-      allViddUrls.map((url) => resolveViddLink(url)),
+      allTvarticlesUrls.map((url) => resolveTvarticlesPage(url)),
     );
 
     // Filter nulls and deduplicate by stream URL
@@ -1076,7 +1077,7 @@ Expected: No errors. If errors about missing `../shared/players` exports, verify
 ```bash
 cd /home/djraval/workspace/anupama-feed
 git add src/desi-serials-to/desi-serials-to.ts
-git commit -m "feat: add desi-serials-to site logic with parallel vidd resolution"
+git commit -m "feat: add desi-serials-to site logic with parallel tvarticles resolution"
 ```
 
 ---
@@ -1095,7 +1096,7 @@ internal `Stream` type to the `NuvioStream` shape Nuvio expects.
 // Desi-Serials.to Nuvio provider entry point.
 
 import { Stream } from "../shared/players";
-import { MediaRequest, fetchMediaRequest, resolveDesiSerials } from "./desi-serials-to";
+import { EpisodeMetadata, fetchEpisodeMetadata, resolveDesiSerials } from "./desi-serials-to";
 
 export interface NuvioStream {
   name: string;
@@ -1112,24 +1113,24 @@ function displayBackend(backend: string): string {
     .replace(/[-_]+/g, "");
 }
 
-function episodeLabel(request: MediaRequest): string {
-  const season = String(request.season || 0).padStart(2, "0");
-  const episode = String(request.episode || 0).padStart(2, "0");
-  const parts = [`${request.title} S${season}E${episode}`];
-  const epTitle = String(request.episodeTitle || "").trim();
-  if (epTitle && !new RegExp(`^episode\\s+${request.episode}$`, "i").test(epTitle)) {
+function episodeLabel(metadata: EpisodeMetadata): string {
+  const season = String(metadata.season || 0).padStart(2, "0");
+  const episode = String(metadata.episode || 0).padStart(2, "0");
+  const parts = [`${metadata.title} S${season}E${episode}`];
+  const epTitle = String(metadata.episodeTitle || "").trim();
+  if (epTitle && !new RegExp(`^episode\\s+${metadata.episode}$`, "i").test(epTitle)) {
     parts.push(epTitle);
   }
-  if (request.runtimeMinutes) {
-    parts.push(`${request.runtimeMinutes}m`);
+  if (metadata.runtimeMinutes) {
+    parts.push(`${metadata.runtimeMinutes}m`);
   }
   return parts.join(" - ");
 }
 
-function toNuvioStream(request: MediaRequest, stream: Stream): NuvioStream {
+function toNuvioStream(metadata: EpisodeMetadata, stream: Stream): NuvioStream {
   return {
     name: `Desi-Serials.to ${displayBackend(stream.backend)}`,
-    title: `${episodeLabel(request)} - ${stream.quality} ${String(stream.kind || "stream").toUpperCase()}`,
+    title: `${episodeLabel(metadata)} - ${stream.quality} ${String(stream.kind || "stream").toUpperCase()}`,
     url: stream.url,
     quality: stream.quality,
     size: stream.size || "",
@@ -1146,9 +1147,9 @@ export async function getStreams(
   if (mediaType !== "tv") return [];
 
   try {
-    const request = await fetchMediaRequest(tmdbId, mediaType, season, episode);
-    const streams = await resolveDesiSerials(request);
-    return streams.map((s) => toNuvioStream(request, s));
+    const metadata = await fetchEpisodeMetadata(tmdbId, mediaType, season, episode);
+    const streams = await resolveDesiSerials(metadata);
+    return streams.map((s) => toNuvioStream(metadata, s));
   } catch (error: any) {
     console.log(`[Desi-Serials.to] getStreams failed: ${error.message}`);
     return [];
@@ -1369,8 +1370,8 @@ git add -A && git commit -m "chore: final verification complete"
 | Before | After |
 |--------|-------|
 | Single 633-line JS file, Promise chains | TypeScript source tree, async/await, esbuild bundling |
-| Only resolves first matching vkprime or flow iframe | Resolves all 5 vidd links in parallel via Promise.all |
-| No vkspeed.com support | `resolveVkEmbed` handles both vkprime + vkspeed |
+| Only resolves first matching vkprime or flow iframe | Resolves all 5 tvarticles links in parallel via Promise.all |
+| No vkspeed.com support | `resolveVkPlayerEmbed` handles both vkprime + vkspeed |
 | `seenBackends` stops at one vkprime + one flow | Dedup by stream URL only |
 | No placeholder detection | `isPlaceholderUrl` filters `/ads/` and `127.0.0.1` |
 | Flow embed020A (JuicyCodes) silently fails | `decodeJuicyCodes` extracts m3u8 from base64+packer |
