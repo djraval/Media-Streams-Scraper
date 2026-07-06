@@ -194,4 +194,5 @@ npm run typecheck        # tsc --noEmit — type errors only, no emit
 - Archive page crawl (sequential, stop when episode found)
 - `unpack` / `decodeText` / `extractMediaUrls` helpers — same logic, typed
 - Nuvio stream object shape and `getStreams` signature
-- `manifest.json` — `filename` still points to `providers/desi-serials-to.js`
+- `manifest.json` — `filename` still points to `providers/desi-serials-to.js`. The `?v=2`
+  cache-busting query parameter is bumped to force Nuvio to re-fetch the rebuilt file.

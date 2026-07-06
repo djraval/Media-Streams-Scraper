@@ -121,13 +121,20 @@ export interface NuvioStream {
     "forceConsistentCasingInFileNames": true,
     "outDir": "./providers",
     "rootDir": "./src",
-    "lib": ["ES2016", "DOM"],
+    "lib": ["ES2020", "DOM"],
     "types": []
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "providers"]
 }
 ```
+
+Note on `lib`: `target: "ES2016"` controls syntax transpilation (async/await → generators
+via esbuild). `lib: ["ES2020", "DOM"]` controls which built-in APIs tsc recognizes. We need
+ES2020 because the code uses `String.prototype.matchAll` (ES2020), `Array.prototype.flat`
+(ES2019), `Array.prototype.flatMap` (ES2019), and `String.prototype.padStart` (ES2017).
+These APIs are available in the Hermes runtime (the current scraper already uses them), so
+no polyfills are needed — we just need tsc to stop reporting them as errors.
 
 - [ ] **Step 3: Create build.js**
 
@@ -157,8 +164,8 @@ function getProvidersToBuild() {
     return args;
   }
   if (!fs.existsSync(srcDir)) {
-    console.error('src/ directory not found');
-    process.exit(1);
+    console.log('No providers found (src/ directory does not exist yet)');
+    return [];
   }
   return fs.readdirSync(srcDir, { withFileTypes: true })
     .filter(d => d.isDirectory() && d.name !== 'shared')
@@ -190,6 +197,12 @@ async function buildProvider(providerName) {
       external: EXTERNAL_MODULES,
       banner: {
         js: `/**\n * ${providerName} - Built from src/${providerName}/\n * Generated: ${new Date().toISOString()}\n */`
+      },
+      footer: {
+        // Nuvio may evaluate the file without a CommonJS `module` object.
+        // Assign getStreams to the global scope as a fallback so the export
+        // works whether Nuvio uses require() or global evaluation.
+        js: `if (typeof module === "undefined" || !module.exports) { var __g = (typeof globalThis !== "undefined" ? globalThis : typeof global !== "undefined" ? global : this); if (typeof __exports !== "undefined") { __g.getStreams = __exports.getStreams; } }`
       },
       logLevel: 'warning'
     });
@@ -246,6 +259,7 @@ async function main() {
       if (result) success++; else failed++;
     }
     console.log(`Done! ${success} built, ${failed} failed`);
+    if (failed > 0) process.exitCode = 1;
   }
 }
 
@@ -260,17 +274,25 @@ main().catch(err => {
 Run: `cd /home/djraval/workspace/anupama-feed && npm install`
 Expected: `node_modules/` created, `package-lock.json` generated, no errors.
 
-- [ ] **Step 5: Verify typecheck runs (no .ts files yet, should succeed with no input)**
+- [ ] **Step 5: Create src/ directory structure (needed for verification)**
+
+Run: `mkdir -p src/shared src/desi-serials-to`
+This creates the directory structure so build.js and tsc can find src/ without errors.
+
+- [ ] **Step 6: Verify typecheck runs (no .ts files yet)**
 
 Run: `cd /home/djraval/workspace/anupama-feed && npx tsc --noEmit`
-Expected: Exits 0 (no files to check, or empty output).
+Expected: Exits 0. If tsc reports TS18003 ("No inputs were found"), that's expected —
+it means no .ts files exist yet. The error is non-fatal and will resolve once Task 2
+creates the first .ts file.
 
-- [ ] **Step 6: Verify build.js runs (no providers yet)**
+- [ ] **Step 7: Verify build.js runs (no providers yet)**
 
 Run: `cd /home/djraval/workspace/anupama-feed && node build.js`
-Expected: "No providers found in src/" or "Building 0 provider(s)... Done! 0 built, 0 failed"
+Expected: "Building 0 provider(s)... Done! 0 built, 0 failed" (the shared/ directory is
+excluded from provider discovery since it has no index.ts).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd /home/djraval/workspace/anupama-feed
@@ -323,7 +345,7 @@ export const FLOW_RE = /^https:\/\/flow\.tvlogy\.to\/[A-Za-z0-9/_-]+\/?$/i;
 
 export function isPlaceholderUrl(url: string): boolean {
   const lower = String(url || "").toLowerCase();
-  return lower.includes("/ads/") || lower.startsWith("https://127.0.0.1") || lower.startsWith("http://127.0.0.1");
+  return lower.includes("/ads/") || lower.includes("127.0.0.1");
 }
 ```
 
@@ -460,7 +482,7 @@ function packerEncode(n: number, base: number): string {
 
 function unpack(blob: string): string {
   const match = String(blob || "").match(
-    /eval\(function\(p,a,c,k,e,(?:d|r)\).*?\}\s*\(\s*'([^']*)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([^']*)'\.split\('\|'\)/s,
+    /eval\(function\(p,a,c,k,e,(?:d|r)\).*?\}\s*\(\s*'(.*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'(.*?)'\.split\('\|'\)/s,
   );
   if (!match) return "";
   const p = match[1].replace(/\\'/g, "'");
@@ -489,9 +511,13 @@ base64-decode, then run `unpack`.
 function decodeJuicyCodes(html: string): string {
   const match = String(html || "").match(/JuicyCodes\.Run\(([^)]+)\)/s);
   if (!match) return "";
-  const fragments = match[1].match(/"([^"]*)"/g);
+  // Extract both double-quoted and single-quoted string fragments from the argument.
+  // JuicyCodes splits the base64 payload across multiple concatenated string literals.
+  const fragments = match[1].match(/"([^"]*)"|'([^']*)'/g);
   if (!fragments) return "";
-  const payload = fragments.map((f) => f.replace(/^"|"$/g, "")).join("");
+  const payload = fragments
+    .map((f) => f.replace(/^["']|["']$/g, ""))
+    .join("");
   const decoded = decodeBase64(payload);
   return unpack(decoded);
 }
@@ -573,8 +599,8 @@ function hlsQualityFromManifest(raw: string): string {
 
 VkPrime and VkSpeed have identical page structure: an embed HTML page containing a
 jwplayer setup with `file: "https://host/...mp4"`. The MP4 may be a placeholder under
-`/ads/` path. We extract all MP4 candidates, rank by quality, pick the best, check
-for placeholder, fetch content-length for size display.
+`/ads/` path. We extract all MP4 candidates, filter out placeholders FIRST, then rank
+by quality and pick the best remaining one.
 
 ```typescript
 // Add after quality helpers in src/shared/players.ts
@@ -591,13 +617,17 @@ export async function resolveVkPlayerEmbed(embedUrl: string, referer: string): P
   const candidates = extractMediaUrls(text, "mp4");
   if (candidates.length === 0) return null;
 
-  // Rank by quality (nearest quality label in surrounding text)
-  const ranked = candidates
+  // Filter out placeholder URLs BEFORE ranking, so a placeholder ranked
+  // first doesn't discard a real candidate that's ranked second.
+  const real = candidates.filter((url) => !isPlaceholderUrl(url));
+  if (real.length === 0) return null;
+
+  // Rank remaining candidates by quality (nearest quality label in surrounding text)
+  const ranked = real
     .map((url) => ({ url, quality: qualityNearUrl(text, url) || 0 }))
     .sort((a, b) => b.quality - a.quality);
 
   const best = ranked[0];
-  if (isPlaceholderUrl(best.url)) return null;
 
   const headers: Record<string, string> = { Referer: embedUrl, "User-Agent": UA };
   const contentLength = await fetchContentLength(best.url, headers);
@@ -1000,21 +1030,26 @@ and calls the appropriate resolver. Returns null on any failure.
 // Add after extractTvarticlesLinks in src/desi-serials-to/desi-serials-to.ts
 
 async function resolveTvarticlesPage(tvarticlesUrl: string): Promise<Stream | null> {
-  const page = await fetchText(tvarticlesUrl, BROWSER_HEADERS);
-  if (!page) return null;
+  try {
+    const page = await fetchText(tvarticlesUrl, BROWSER_HEADERS);
+    if (!page) return null;
 
-  const iframeUrl = extractIframes(page).find(
-    (url) => resolverForIframe(url) !== null,
-  );
-  if (!iframeUrl) return null;
+    const iframeUrl = extractIframes(page).find(
+      (url) => resolverForIframe(url) !== null,
+    );
+    if (!iframeUrl) return null;
 
-  const entry = resolverForIframe(iframeUrl);
-  if (!entry) return null;
+    const entry = resolverForIframe(iframeUrl);
+    if (!entry) return null;
 
-  const stream = await entry.resolve(iframeUrl, tvarticlesUrl);
-  if (!stream || isPlaceholderUrl(stream.url)) return null;
+    const stream = await entry.resolve(iframeUrl, tvarticlesUrl);
+    if (!stream || isPlaceholderUrl(stream.url)) return null;
 
-  return stream;
+    return stream;
+  } catch {
+    // Any unexpected error in this single link should not block the other links.
+    return null;
+  }
 }
 ```
 
@@ -1037,16 +1072,18 @@ export async function resolveDesiSerials(metadata: EpisodeMetadata): Promise<Str
     const episodeUrls = findEpisodePageLinks(archive, metadata);
     if (episodeUrls.length === 0) continue;
 
-    // Fetch all episode pages, collect all tvarticles links
+    // Fetch all episode pages in parallel (null on failure, won't reject the batch)
     const episodePages = await Promise.all(
-      episodeUrls.map((url) => fetchText(url, BROWSER_HEADERS)),
+      episodeUrls.map((url) => fetchText(url, BROWSER_HEADERS).catch(() => null)),
     );
     const allTvarticlesUrls = dedupe(
       episodePages.flatMap((page) => (page ? extractTvarticlesLinks(page) : [])),
     );
     if (allTvarticlesUrls.length === 0) continue;
 
-    // Resolve ALL tvarticles links in parallel
+    // Resolve ALL tvarticles links in parallel.
+    // resolveTvarticlesPage has its own try/catch, so a single failure
+    // never rejects the whole Promise.all — it returns null instead.
     const resolved = await Promise.all(
       allTvarticlesUrls.map((url) => resolveTvarticlesPage(url)),
     );
@@ -1174,8 +1211,9 @@ Expected: `function`
 
 - [ ] **Step 5: Verify the built file has no async/await (transpiled to generators)**
 
-Run: `cd /home/djraval/workspace/anupama-feed && grep -c "async " providers/desi-serials-to.js && grep -c "await " providers/desi-serials-to.js`
-Expected: `0` for both (async/await transpiled away by esbuild targeting ES2016).
+Run: `cd /home/djraval/workspace/anupama-feed && ! grep -E '\b(async|await)\b' providers/desi-serials-to.js`
+Expected: Command exits 0 (no matches found). If grep finds async/await, esbuild did not
+transpile correctly — check that `target: 'es2016'` is set in build.js.
 
 - [ ] **Step 6: Commit**
 
