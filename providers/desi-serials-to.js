@@ -539,72 +539,62 @@ function resolveTvarticlesPage(tvarticlesUrl, options) {
 
 function resolveDesiSerials(request, options) {
   options = options || {};
-  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
-  const seenEpisodes = new Set();
-  const seenBackends = new Set();
-  const seenStreams = new Set();
-  const streams = [];
-  const archiveUrls = buildCandidateUrls(request).desiSerials;
+  var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  var archiveUrls = buildCandidateUrls(request).desiSerials;
 
   function processArchive(index) {
     if (index >= archiveUrls.length) {
-      return Promise.resolve(streams);
+      return Promise.resolve([]);
     }
     return fetchText(fetchImpl, archiveUrls[index], { headers: BROWSER_HEADERS })
       .then(function (archive) {
         if (!archive) {
           return processArchive(index + 1);
         }
-        const episodeUrls = episodePageCandidates(archive, request);
-        return processEpisodes(episodeUrls, 0);
-      })
-      .then(function () {
-        if (streams.length > 0) {
-          streams.sort(function (left, right) {
-            const leftRank = left.backend === "vkprime" ? -1 : 1;
-            const rightRank = right.backend === "vkprime" ? -1 : 1;
-            return leftRank - rightRank;
+        var episodeUrls = episodePageCandidates(archive, request);
+        if (episodeUrls.length === 0) {
+          return processArchive(index + 1);
+        }
+        // Fetch all episode pages in parallel (null on failure, won't reject the batch).
+        return Promise.all(
+          episodeUrls.map(function (url) {
+            return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
+              .catch(function () { return null; });
+          })
+        ).then(function (episodePages) {
+          // Collect all tvarticles links from all episode pages.
+          var allTvarticlesUrls = dedupe(
+            episodePages.flatMap(function (page) {
+              return page ? tvarticlesLinks(page) : [];
+            })
+          );
+          if (allTvarticlesUrls.length === 0) {
+            return processArchive(index + 1);
+          }
+          // Resolve ALL tvarticles links in parallel.
+          // resolveTvarticlesPage has its own .catch(), so a single failure
+          // returns null instead of rejecting the whole Promise.all.
+          return Promise.all(
+            allTvarticlesUrls.map(function (url) {
+              return resolveTvarticlesPage(url, { fetchImpl: fetchImpl });
+            })
+          ).then(function (resolved) {
+            // Filter nulls and deduplicate by stream URL.
+            var seen = new Set();
+            var streams = [];
+            for (var i = 0; i < resolved.length; i++) {
+              var stream = resolved[i];
+              if (stream && !seen.has(stream.url)) {
+                seen.add(stream.url);
+                streams.push(stream);
+              }
+            }
+            if (streams.length > 0) {
+              return streams;
+            }
+            return processArchive(index + 1);
           });
-          return streams;
-        }
-        return processArchive(index + 1);
-      });
-  }
-
-  function processEpisodes(episodeUrls, index) {
-    if (index >= episodeUrls.length) {
-      return Promise.resolve();
-    }
-    const episodeUrl = episodeUrls[index];
-    if (seenEpisodes.has(episodeUrl)) {
-      return processEpisodes(episodeUrls, index + 1);
-    }
-    seenEpisodes.add(episodeUrl);
-    return fetchText(fetchImpl, episodeUrl, { headers: BROWSER_HEADERS })
-      .then(function (episode) {
-        if (!episode) {
-          return processEpisodes(episodeUrls, index + 1);
-        }
-        const viddUrls = tvarticlesLinks(episode);
-        return processViddUrls(viddUrls, 0);
-      })
-      .then(function () {
-        return processEpisodes(episodeUrls, index + 1);
-      });
-  }
-
-  function processViddUrls(viddUrls, index) {
-    if (index >= viddUrls.length) {
-      return Promise.resolve();
-    }
-    return resolveTvarticlePage(viddUrls[index], { fetchImpl: fetchImpl })
-      .then(function (stream) {
-        if (stream && !seenBackends.has(stream.backend) && !seenStreams.has(stream.url)) {
-          seenBackends.add(stream.backend);
-          seenStreams.add(stream.url);
-          streams.push(stream);
-        }
-        return processViddUrls(viddUrls, index + 1);
+        });
       });
   }
 
