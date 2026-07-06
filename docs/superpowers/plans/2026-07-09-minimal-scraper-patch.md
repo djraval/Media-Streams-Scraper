@@ -12,18 +12,18 @@
 
 ## What changes in the existing file
 
-| Line(s) | Current | New |
+| Location | Current | New |
 |---------|---------|-----|
-| 36 | (missing) | Add `VKSPEED_RE` regex |
-| 36+ | (missing) | Add `isPlaceholderUrl(url)` function |
-| 168+ | (missing) | Add `decodeBase64(raw)` helper (Hermes-safe, no atob dependency) |
-| 168+ | (missing) | Add `decodeJuicyCodes(html)` function |
-| 349-353 | `firstIframe()` only matches VKPRIME_RE + FLOW_RE | `findPlayerIframe()` matches VKPRIME_RE + VKSPEED_RE + FLOW_RE |
-| 407-435 | `resolveVkprimePlayer()` — hardcoded backend "vkprime", no placeholder filtering | `resolveVkPlayer()` — backend from host, filters placeholders before ranking |
-| 437-464 | `resolveFlowPlayer()` — only scans direct m3u8, misses JuicyCodes | `resolveFlowPlayer()` — tries direct m3u8 first, then JuicyCodes decode |
-| 466-486 | `resolveTvarticlePage()` — dispatches to vkprime or flow | `resolveTvarticlesPage()` — dispatches to vkPlayer or flow, wraps in try/catch |
-| 488-560 | `resolveDesiSerials()` — sequential `processViddUrls`, `seenBackends` dedup | `resolveDesiSerials()` — `Promise.all` for all tvarticles links, dedup by URL only |
-| manifest.json | `?v=1` | `?v=2` |
+| After `FLOW_RE` const | (missing) | Add `VKSPEED_RE` regex |
+| After regex constants | (missing) | Add `isPlaceholderUrl(url)` function |
+| After `unpack` function | (missing) | Add `decodeBase64(raw)` helper (Hermes-safe, no atob dependency) |
+| After `decodeBase64` | (missing) | Add `decodeJuicyCodes(html)` function |
+| `firstIframe()` function | Only matches VKPRIME_RE + FLOW_RE | `findPlayerIframe()` matches VKPRIME_RE + VKSPEED_RE + FLOW_RE |
+| `resolveVkprimePlayer()` function | Hardcoded backend "vkprime", no placeholder filtering | `resolveVkPlayer()` — backend from host, filters placeholders before ranking |
+| `resolveFlowPlayer()` function | Only scans direct m3u8, misses JuicyCodes | Tries direct m3u8 first, then JuicyCodes decode |
+| `resolveTvarticlePage()` function | Dispatches to vkprime or flow | `resolveTvarticlesPage()` — dispatches to vkPlayer or flow, wraps in catch |
+| `resolveDesiSerials()` function | Sequential `processViddUrls`, `seenBackends` dedup | `Promise.all` for all tvarticles links, dedup by URL only |
+| `manifest.json` | `?v=1` | `?v=2` |
 
 ### What does NOT change
 
@@ -44,9 +44,9 @@
 
 This task adds the 4 new building blocks that the rest of the patch depends on.
 
-- [ ] **Step 1: Add VKSPEED_RE after FLOW_RE (line 36)**
+- [ ] **Step 1: Add VKSPEED_RE after FLOW_RE**
 
-Insert after line 36 (`const FLOW_RE = ...`):
+Find the line `const FLOW_RE = /^https:\/\/flow\.tvlogy\.to\/[A-Za-z0-9/_-]+\/?$/i;` and insert after it:
 
 ```javascript
 const VKSPEED_RE = /^https:\/\/vkspeed\.com\/embed-[A-Za-z0-9-]+\.html$/i;
@@ -63,10 +63,9 @@ function isPlaceholderUrl(url) {
 }
 ```
 
-- [ ] **Step 3: Add decodeBase64 after unpack (after line 168)**
+- [ ] **Step 3: Add decodeBase64 after the unpack function**
 
-Hermes has `atob` but with strict padding requirements on older versions. This small
-decoder handles missing padding safely.
+Find the closing brace of the `unpack` function (the function that matches `eval(function(p,a,c,k,e,`) and insert after it:
 
 ```javascript
 var B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -134,9 +133,9 @@ VkPrime and VkSpeed have identical page structure. One function handles both —
 backend name is derived from the embed URL host. Placeholders are filtered BEFORE
 ranking so a placeholder ranked first doesn't discard a real candidate ranked second.
 
-- [ ] **Step 1: Replace resolveVkprimePlayer with resolveVkPlayer**
+- [ ] **Step 1: Replace the resolveVkprimePlayer function with resolveVkPlayer**
 
-Replace lines 407-435 (the entire `resolveVkprimePlayer` function) with:
+Find the function `function resolveVkprimePlayer(embedUrl, refererUrl, options) {` and replace the entire function (from its `function` line to its closing `}`) with:
 
 ```javascript
 function resolveVkPlayer(embedUrl, refererUrl, options) {
@@ -162,7 +161,7 @@ function resolveVkPlayer(embedUrl, refererUrl, options) {
       }
       var best = real[0];
       var headers = { Referer: embedUrl, "User-Agent": UA };
-      var backend = embedUrl.indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime";
+      var backend = embedUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime";
       return fetchContentLength(fetchImpl, best.url, headers).then(function (contentLength) {
         return {
           backend: backend,
@@ -203,9 +202,9 @@ but fails on `embed020A` (Flash Player), which wraps the player config in
 `JuicyCodes.Run("base64...")`. The fix: try direct extraction first, then fall back to
 JuicyCodes decode.
 
-- [ ] **Step 1: Replace resolveFlowPlayer**
+- [ ] **Step 1: Replace the resolveFlowPlayer function**
 
-Replace lines 437-464 (the entire `resolveFlowPlayer` function) with:
+Find the function `function resolveFlowPlayer(playerUrl, refererUrl, options) {` and replace the entire function (from its `function` line to its closing `}`) with:
 
 ```javascript
 function resolveFlowPlayer(playerUrl, refererUrl, options) {
@@ -269,9 +268,9 @@ clarity. Update `resolveTvarticlePage` to dispatch to `resolveVkPlayer` (not the
 `resolveVkprimePlayer`), accept VkSpeed iframes, and wrap in a catch so one bad link
 never blocks the others.
 
-- [ ] **Step 1: Replace firstIframe with findPlayerIframe**
+- [ ] **Step 1: Replace the firstIframe function with findPlayerIframe**
 
-Replace lines 349-353 (the entire `firstIframe` function) with:
+Find the function `function firstIframe(markup) {` and replace the entire function with:
 
 ```javascript
 function findPlayerIframe(markup) {
@@ -281,9 +280,9 @@ function findPlayerIframe(markup) {
 }
 ```
 
-- [ ] **Step 2: Replace resolveTvarticlePage with resolveTvarticlesPage**
+- [ ] **Step 2: Replace the resolveTvarticlePage function with resolveTvarticlesPage**
 
-Replace lines 466-486 (the entire `resolveTvarticlePage` function) with:
+Find the function `function resolveTvarticlePage(viddUrl, options) {` and replace the entire function (from its `function` line to its closing `}`) with:
 
 ```javascript
 function resolveTvarticlesPage(tvarticlesUrl, options) {
@@ -337,8 +336,7 @@ stream URL — so you can get both an MP4 and an HLS stream from the same episod
 
 - [ ] **Step 1: Replace resolveDesiSerials**
 
-Replace lines 488-560 (the entire `resolveDesiSerials` function and its inner
-`processArchive`, `processEpisodes`, `processViddUrls` functions) with:
+Replace the entire `resolveDesiSerials` function (from `function resolveDesiSerials(request, options) {` through its closing `}`, including all inner functions `processArchive`, `processEpisodes`, `processViddUrls`) with:
 
 ```javascript
 function resolveDesiSerials(request, options) {
@@ -359,54 +357,58 @@ function resolveDesiSerials(request, options) {
         if (episodeUrls.length === 0) {
           return processArchive(index + 1);
         }
-        // Fetch all episode pages in parallel.
+        // Fetch all episode pages in parallel (null on failure, won't reject the batch).
         return Promise.all(
           episodeUrls.map(function (url) {
             return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
               .catch(function () { return null; });
           })
-        );
-      })
-      .then(function (episodePages) {
-        // Collect all tvarticles links from all episode pages.
-        var allTvarticlesUrls = dedupe(
-          episodePages.flatMap(function (page) {
-            return page ? tvarticlesLinks(page) : [];
-          })
-        );
-        if (allTvarticlesUrls.length === 0) {
-          return processArchive(index + 1);
-        }
-        // Resolve ALL tvarticles links in parallel.
-        // resolveTvarticlesPage has its own .catch(), so a single failure
-        // returns null instead of rejecting the whole Promise.all.
-        return Promise.all(
-          allTvarticlesUrls.map(function (url) {
-            return resolveTvarticlesPage(url, { fetchImpl: fetchImpl });
-          })
-        );
-      })
-      .then(function (resolved) {
-        // Filter nulls and deduplicate by stream URL.
-        var seen = new Set();
-        var streams = [];
-        for (var i = 0; i < resolved.length; i++) {
-          var stream = resolved[i];
-          if (stream && !seen.has(stream.url)) {
-            seen.add(stream.url);
-            streams.push(stream);
+        ).then(function (episodePages) {
+          // Collect all tvarticles links from all episode pages.
+          var allTvarticlesUrls = dedupe(
+            episodePages.flatMap(function (page) {
+              return page ? tvarticlesLinks(page) : [];
+            })
+          );
+          if (allTvarticlesUrls.length === 0) {
+            return processArchive(index + 1);
           }
-        }
-        if (streams.length > 0) {
-          return streams;
-        }
-        return processArchive(index + 1);
+          // Resolve ALL tvarticles links in parallel.
+          // resolveTvarticlesPage has its own .catch(), so a single failure
+          // returns null instead of rejecting the whole Promise.all.
+          return Promise.all(
+            allTvarticlesUrls.map(function (url) {
+              return resolveTvarticlesPage(url, { fetchImpl: fetchImpl });
+            })
+          ).then(function (resolved) {
+            // Filter nulls and deduplicate by stream URL.
+            var seen = new Set();
+            var streams = [];
+            for (var i = 0; i < resolved.length; i++) {
+              var stream = resolved[i];
+              if (stream && !seen.has(stream.url)) {
+                seen.add(stream.url);
+                streams.push(stream);
+              }
+            }
+            if (streams.length > 0) {
+              return streams;
+            }
+            return processArchive(index + 1);
+          });
+        });
       });
   }
 
   return processArchive(0);
 }
 ```
+
+Note: The episode-page fetch and tvarticles resolution are nested INSIDE the archive
+fetch success branch. This ensures that `processArchive(index + 1)` recursive calls
+return directly without flowing into `.then()` handlers that expect page HTML or
+resolved streams. The previous flat-chain version had a bug where recursive fallback
+results would be misinterpreted as episode page arrays or stream arrays.
 
 Note: `flatMap` is available in the Hermes runtime — the current scraper already uses
 `matchAll` (ES2020) and `padStart` (ES2017). `flatMap` is ES2019, which is safe.
@@ -423,16 +425,19 @@ Run:
 cd /home/djraval/workspace/anupama-feed
 node -e "
 var scraper = require('./providers/desi-serials-to.js');
-scraper.getStreams('154521', 'tv', 1, 1).then(function(streams) {
+scraper.getStreams('154521', 'tv', 3, 120).then(function(streams) {
   console.log('Streams found:', streams.length);
   streams.forEach(function(s) { console.log(JSON.stringify(s)); });
 }).catch(function(e) { console.error('Error:', e.message); });
 "
 ```
 
-This will make real network requests. It may take 10-30 seconds. Expected: 0-2 streams
-(episode 1 of season 1 may not be on the site; if it returns 0 that's fine as long as
-there's no crash).
+Note: `154521` is the TMDB ID for Anupamaa. Season 3, episode 120 is an example —
+replace with any season/episode you know is on desi-serials.to. If you're unsure,
+check the site for a recent episode URL and cross-reference the air date on TMDB.
+This will make real network requests and may take 10-30 seconds. Expected: 0-2
+streams. If it returns 0 streams, try a different season/episode before assuming
+the scraper is broken.
 
 - [ ] **Step 4: Commit**
 
@@ -453,11 +458,11 @@ Bump version to force Nuvio to re-fetch the updated scraper file.
 
 - [ ] **Step 1: Update manifest.json**
 
-Change `"version": "1.0.0"` to `"version": "2.0.0"` in both the repo-level and scraper-level fields. Change `"filename": "providers/desi-serials-to.js?v=1"` to `"providers/desi-serials-to.js?v=2"`. Update description to mention VkSpeed.
+Change `"version": "1.0.0"` to `"version": "2.0.0"` in both the repo-level and scraper-level fields. Change `"filename": "providers/desi-serials-to.js?v=1"` to `"providers/desi-serials-to.js?v=2"`. Update the description to mention VkSpeed. Do NOT change the repo-level `"name"` field — keep it as the current value.
 
 ```json
 {
-  "name": "Media Streams Scraper",
+  "name": "Desi-Serials Repo",
   "version": "2.0.0",
   "scrapers": [
     {
@@ -505,13 +510,15 @@ curl -s "https://api.themoviedb.org/3/search/tv?api_key=4e1899804b6db6d01db1e593
 - [ ] **Step 2: Run getStreams for a recent aired episode**
 
 Replace `TMDB_ID` with the ID from step 1. Use a season/episode that has aired and
-should be on desi-serials.to (check the site for recent episodes).
+should be on desi-serials.to. Check the site for a recent episode URL first — for
+example, if the site shows `anupamaa-episode-5th-july-2025-watch-online`, find the
+corresponding season/episode numbers on TMDB. Use those numbers instead of `1, 1`.
 
 ```bash
 cd /home/djraval/workspace/anupama-feed
 node -e "
 var scraper = require('./providers/desi-serials-to.js');
-scraper.getStreams('TMDB_ID', 'tv', 1, 1).then(function(streams) {
+scraper.getStreams('TMDB_ID', 'tv', SEASON, EPISODE).then(function(streams) {
   console.log('Streams found:', streams.length);
   streams.forEach(function(s) { console.log(JSON.stringify(s, null, 2)); });
 }).catch(function(e) { console.error('Error:', e.message); });
@@ -527,7 +534,7 @@ if content is available and not a placeholder).
 cd /home/djraval/workspace/anupama-feed
 node -e "
 var scraper = require('./providers/desi-serials-to.js');
-scraper.getStreams('TMDB_ID', 'tv', 1, 1).then(function(streams) {
+scraper.getStreams('TMDB_ID', 'tv', SEASON, EPISODE).then(function(streams) {
   var placeholders = streams.filter(function(s) {
     return s.url.indexOf('/ads/') !== -1 || s.url.indexOf('127.0.0.1') !== -1;
   });
@@ -547,7 +554,7 @@ scraper.getStreams('TMDB_ID', 'tv', 1, 1).then(function(streams) {
 cd /home/djraval/workspace/anupama-feed
 node -e "
 var scraper = require('./providers/desi-serials-to.js');
-scraper.getStreams('TMDB_ID', 'tv', 1, 1).then(function(streams) {
+scraper.getStreams('TMDB_ID', 'tv', SEASON, EPISODE).then(function(streams) {
   var urls = streams.map(function(s) { return s.url; });
   var unique = new Set(urls);
   if (urls.length !== unique.size) {
