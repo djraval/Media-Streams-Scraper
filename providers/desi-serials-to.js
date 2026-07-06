@@ -442,9 +442,9 @@ function fetchContentLength(fetchImpl, url, headers) {
     .catch(function () { return 0; });
 }
 
-function resolveVkprimePlayer(embedUrl, refererUrl, options) {
+function resolveVkPlayer(embedUrl, refererUrl, options) {
   options = options || {};
-  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
   return fetchText(fetchImpl, embedUrl, {
     headers: Object.assign({}, BROWSER_HEADERS, { Referer: refererUrl }),
   })
@@ -452,16 +452,23 @@ function resolveVkprimePlayer(embedUrl, refererUrl, options) {
       if (!player) {
         return null;
       }
-      const payload = [player, unpack(player)].filter(Boolean).join("\n");
-      const ranked = rankedMp4Candidates(payload);
+      var payload = [player, unpack(player)].filter(Boolean).join("\n");
+      var ranked = rankedMp4Candidates(payload);
       if (ranked.length === 0) {
         return null;
       }
-      const best = ranked[0];
-      const headers = { Referer: embedUrl, "User-Agent": UA };
+      // Filter out placeholder URLs before picking the best quality.
+      // A placeholder ranked first should not discard a real candidate ranked second.
+      var real = ranked.filter(function (entry) { return !isPlaceholderUrl(entry.url); });
+      if (real.length === 0) {
+        return null;
+      }
+      var best = real[0];
+      var headers = { Referer: embedUrl, "User-Agent": UA };
+      var backend = embedUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime";
       return fetchContentLength(fetchImpl, best.url, headers).then(function (contentLength) {
         return {
-          backend: "vkprime",
+          backend: backend,
           kind: "mp4",
           quality: mp4QualityLabel(best.quality),
           url: best.url,
