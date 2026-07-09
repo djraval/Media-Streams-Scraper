@@ -27,6 +27,7 @@ const CHANNEL_SLUGS = {
   "sony tv": ["sony-tv"],
   "star bharat": ["star-bharat"],
   "star plus": ["star-plus"],
+  "starplus": ["star-plus"],
   "zee tv": ["zee-tv"],
 };
 
@@ -345,6 +346,21 @@ function buildCandidateUrls(request) {
     }
   }
   return { desiSerials: dedupe(urls) };
+}
+
+function buildSearchUrls(request) {
+  const dateSlug = episodeDateSlug(request.airDate);
+  if (!dateSlug) {
+    return [];
+  }
+  // WordPress search requires words separated by + (spaces), not hyphens.
+  // The date slug is "10th-april-2026" but the search query needs "10th april 2026".
+  var dateQuery = dateSlug.replace(/-/g, " ");
+  // Site search: https://www.desiserials.to/?s=<slug>+<date+words>
+  // Returns direct episode page links, works even for episodes deep in the archive.
+  return (request.slugCandidates || []).map(function (slug) {
+    return "https://www.desi-serials.to/?s=" + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
+  });
 }
 
 function fetchText(fetchImpl, url, options) {
@@ -740,72 +756,96 @@ function resolveTvarticlesPage(tvarticlesUrl, options) {
     .catch(function () { return null; });
 }
 
+function resolveFromEpisodeUrls(fetchImpl, episodeUrls, request) {
+  if (episodeUrls.length === 0) {
+    return Promise.resolve([]);
+  }
+  return Promise.all(
+    episodeUrls.map(function (url) {
+      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
+        .catch(function () { return null; });
+    })
+  ).then(function (episodePages) {
+    var allTvarticlesUrls = dedupe(
+      episodePages.flatMap(function (page) {
+        return page ? tvarticlesLinks(page) : [];
+      })
+    );
+    if (allTvarticlesUrls.length === 0) {
+      return [];
+    }
+    return Promise.all(
+      allTvarticlesUrls.map(function (url) {
+        return resolveTvarticlesPage(url, { fetchImpl: fetchImpl });
+      })
+    ).then(function (resolved) {
+      var seen = new Set();
+      var streams = [];
+      for (var i = 0; i < resolved.length; i++) {
+        var stream = resolved[i];
+        if (!stream) { continue; }
+        var dedupeKey = stream.url + "\0" + (stream.sourceTag || "");
+        if (!seen.has(dedupeKey)) {
+          seen.add(dedupeKey);
+          streams.push(stream);
+        }
+      }
+      return streams;
+    });
+  });
+}
+
 function resolveDesiSerials(request, options) {
   options = options || {};
   var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
   var archiveUrls = buildCandidateUrls(request).desiSerials;
+  var searchUrls = buildSearchUrls(request);
 
-  function processArchive(index) {
-    if (index >= archiveUrls.length) {
-      return Promise.resolve([]);
-    }
-    return fetchText(fetchImpl, archiveUrls[index], { headers: BROWSER_HEADERS })
-      .then(function (archive) {
-        if (!archive) {
-          return processArchive(index + 1);
-        }
-        var episodeUrls = episodePageCandidates(archive, request);
-        if (episodeUrls.length === 0) {
-          return processArchive(index + 1);
-        }
-        // Fetch all episode pages in parallel (null on failure, won't reject the batch).
-        return Promise.all(
-          episodeUrls.map(function (url) {
-            return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
-              .catch(function () { return null; });
-          })
-        ).then(function (episodePages) {
-          // Collect all tvarticles links from all episode pages.
-          var allTvarticlesUrls = dedupe(
-            episodePages.flatMap(function (page) {
-              return page ? tvarticlesLinks(page) : [];
-            })
-          );
-          if (allTvarticlesUrls.length === 0) {
-            return processArchive(index + 1);
-          }
-          // Resolve ALL tvarticles links in parallel.
-          // resolveTvarticlesPage has its own .catch(), so a single failure
-          // returns null instead of rejecting the whole Promise.all.
-          return Promise.all(
-            allTvarticlesUrls.map(function (url) {
-              return resolveTvarticlesPage(url, { fetchImpl: fetchImpl });
-            })
-          ).then(function (resolved) {
-            // Filter nulls and deduplicate by (url, sourceTag) so that
-            // different Flow variants (embed/plyr/nflix) pointing at the
-            // same underlying HLS URL are kept as distinct streams.
-            var seen = new Set();
-            var streams = [];
-            for (var i = 0; i < resolved.length; i++) {
-              var stream = resolved[i];
-              if (!stream) { continue; }
-              var dedupeKey = stream.url + "\0" + (stream.sourceTag || "");
-              if (!seen.has(dedupeKey)) {
-                seen.add(dedupeKey);
-                streams.push(stream);
-              }
-            }
-            if (streams.length > 0) {
-              return streams;
-            }
-            return processArchive(index + 1);
-          });
-        });
-      });
+  // Phase 1: Try the site search first — it's fast (1 request per slug variant)
+  // and returns direct episode page links regardless of how deep the episode
+  // is in the archive pagination.
+  if (searchUrls.length > 0) {
+    return Promise.all(
+      searchUrls.map(function (url) {
+        return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS });
+      })
+    ).then(function (searchPages) {
+      var episodeUrls = dedupe(
+        searchPages.flatMap(function (page) {
+          return page ? episodePageCandidates(page, request) : [];
+        })
+      );
+      if (episodeUrls.length > 0) {
+        return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request);
+      }
+      // Phase 2: Fall back to archive pagination if search found nothing.
+      return processArchive(fetchImpl, archiveUrls, request, 0);
+    });
   }
 
-  return processArchive(0);
+  return processArchive(fetchImpl, archiveUrls, request, 0);
+}
+
+function processArchive(fetchImpl, archiveUrls, request, index) {
+  if (index >= archiveUrls.length) {
+    return Promise.resolve([]);
+  }
+  return fetchText(fetchImpl, archiveUrls[index], { headers: BROWSER_HEADERS })
+    .then(function (archive) {
+      if (!archive) {
+        return processArchive(fetchImpl, archiveUrls, request, index + 1);
+      }
+      var episodeUrls = episodePageCandidates(archive, request);
+      if (episodeUrls.length === 0) {
+        return processArchive(fetchImpl, archiveUrls, request, index + 1);
+      }
+      return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request).then(function (streams) {
+        if (streams.length > 0) {
+          return streams;
+        }
+        return processArchive(fetchImpl, archiveUrls, request, index + 1);
+      });
+    });
 }
 
 function displayBackend(backend) {
