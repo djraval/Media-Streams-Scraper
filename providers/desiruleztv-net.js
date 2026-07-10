@@ -459,6 +459,9 @@ function mediaLabel(request) {
   return episodeLabel(request);
 }
 function toNuvioStream(request, stream) {
+  var estimated = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
+  if (estimated)
+    stream.quality = estimated;
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {
@@ -543,7 +546,7 @@ function episodePageCandidates(markup, request) {
     })
   );
 }
-function resolveFromEpisodeUrls(fetchImpl, episodeUrls, runtimeMinutes) {
+function resolveFromEpisodeUrls(fetchImpl, episodeUrls) {
   if (episodeUrls.length === 0) {
     return Promise.resolve([]);
   }
@@ -580,15 +583,14 @@ function resolveFromEpisodeUrls(fetchImpl, episodeUrls, runtimeMinutes) {
             quality: best.quality || "unknown",
             url: best.url,
             size: "",
+            sizeBytes: 0,
             duration: 0,
             sourceTag: "",
             headers: best.headers
           };
           return fetchContentLength(fetchImpl, best.url, best.headers).then(function(sizeBytes) {
             stream.size = formatBytes(sizeBytes);
-            var estimated = estimateQualityFromSize(sizeBytes, runtimeMinutes);
-            if (estimated)
-              stream.quality = estimated;
+            stream.sizeBytes = sizeBytes;
             return stream;
           });
         }).catch(function(e) {
@@ -613,7 +615,7 @@ function processArchive(fetchImpl, archiveUrls, request, index) {
     if (episodeUrls.length === 0) {
       return processArchive(fetchImpl, archiveUrls, request, index + 1);
     }
-    return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request.runtimeMinutes || 0).then(function(streams) {
+    return resolveFromEpisodeUrls(fetchImpl, episodeUrls).then(function(streams) {
       if (streams.length > 0) {
         return streams;
       }
@@ -638,7 +640,7 @@ function resolveDesiRulezTV(request, options) {
         })
       );
       if (episodeUrls.length > 0) {
-        return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request.runtimeMinutes || 0);
+        return resolveFromEpisodeUrls(fetchImpl, episodeUrls);
       }
       return processArchive(fetchImpl, archiveUrls, request, 0);
     });

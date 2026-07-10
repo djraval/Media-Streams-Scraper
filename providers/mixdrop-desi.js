@@ -354,6 +354,9 @@ function mediaLabel(request) {
   return episodeLabel(request);
 }
 function toNuvioStream(request, stream) {
+  var estimated = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
+  if (estimated)
+    stream.quality = estimated;
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {
@@ -452,7 +455,6 @@ function detectQuality(text) {
 function resolveMixDrop(embedUrl, refererUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  var runtimeMinutes = options.runtimeMinutes || 0;
   var url = normalizeMixDropUrl(embedUrl);
   var fileId = mixDropId(url);
   return fetchText(fetchImpl, url, browserHeaders(refererUrl)).then(function(html) {
@@ -493,6 +495,7 @@ function resolveMixDrop(embedUrl, refererUrl, options) {
       quality: quality || "unknown",
       url: mp4Url,
       size: "",
+      sizeBytes: 0,
       duration: 0,
       sourceTag: "",
       headers,
@@ -500,9 +503,7 @@ function resolveMixDrop(embedUrl, refererUrl, options) {
     };
     return fetchContentLength(fetchImpl, mp4Url, headers).then(function(sizeBytes) {
       stream.size = formatBytes(sizeBytes);
-      var estimated = estimateQualityFromSize(sizeBytes, runtimeMinutes);
-      if (estimated)
-        stream.quality = estimated;
+      stream.sizeBytes = sizeBytes;
       return stream;
     });
   }).catch(function(err) {
@@ -679,7 +680,7 @@ function buildMoviePageUrls(request) {
   }
   return dedupe(urls);
 }
-function resolveFromEpisodePages(fetchImpl, episodeUrls, runtimeMinutes) {
+function resolveFromEpisodePages(fetchImpl, episodeUrls) {
   if (episodeUrls.length === 0) {
     return Promise.resolve([]);
   }
@@ -692,7 +693,7 @@ function resolveFromEpisodePages(fetchImpl, episodeUrls, runtimeMinutes) {
       return Promise.resolve([]);
     return Promise.all(
       allEmbeds.map(function(embed) {
-        return resolveMixDrop(embed.url, WATCH_MOVIES_BASE, { fetchImpl, runtimeMinutes }).then(function(stream) {
+        return resolveMixDrop(embed.url, WATCH_MOVIES_BASE, { fetchImpl }).then(function(stream) {
           if (stream && embed.quality && stream.quality === "unknown") {
             stream.quality = embed.quality;
           }
@@ -734,10 +735,10 @@ function resolveMixDropDesi(request, options) {
   var fetchImpl = resolveFetch(options);
   if (request.mediaType === "movie") {
     var movieUrls = buildMoviePageUrls(request);
-    return resolveFromEpisodePages(fetchImpl, movieUrls, request.runtimeMinutes || 0);
+    return resolveFromEpisodePages(fetchImpl, movieUrls);
   }
   var episodeUrls = buildEpisodePageUrls(request);
-  return resolveFromEpisodePages(fetchImpl, episodeUrls, request.runtimeMinutes || 0);
+  return resolveFromEpisodePages(fetchImpl, episodeUrls);
 }
 function getStreamsForRequest(request, options) {
   options = options || {};

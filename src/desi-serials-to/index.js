@@ -17,7 +17,7 @@ import {
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { decodeJuicyCodes } from "../lib/packer.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
-import { formatBytes, toNuvioStream, estimateQualityFromSize } from "../lib/format.js";
+import { formatBytes, toNuvioStream } from "../lib/format.js";
 
 // --- Layer 0: Site configuration constants ---
 
@@ -146,13 +146,11 @@ function findPlayerIframe(markup) {
 function resolveVkPlayerAdapter(embedUrl, refererUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  var runtimeMinutes = options.runtimeMinutes || 0;
   return resolveVkPlayer(embedUrl, refererUrl, { fetchImpl: fetchImpl })
     .then(function (sources) {
       if (!sources || sources.length === 0) {
         return null;
       }
-      // Filter out placeholder URLs before picking the best quality.
       var real = sources.filter(function (entry) {
         return !isPlaceholderUrl(entry.url);
       });
@@ -168,14 +166,14 @@ function resolveVkPlayerAdapter(embedUrl, refererUrl, options) {
         quality: best.quality || "unknown",
         url: best.url,
         size: "",
+        sizeBytes: 0,
         duration: 0,
         sourceTag: "",
         headers: headers,
       };
       return fetchContentLength(fetchImpl, best.url, headers).then(function (sizeBytes) {
         stream.size = formatBytes(sizeBytes);
-        var estimated = estimateQualityFromSize(sizeBytes, runtimeMinutes);
-        if (estimated) stream.quality = estimated;
+        stream.sizeBytes = sizeBytes;
         return stream;
       });
     });
@@ -292,7 +290,6 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
 function resolveTvarticlesPage(tvarticlesUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  var runtimeMinutes = options.runtimeMinutes || 0;
   return fetchText(fetchImpl, tvarticlesUrl, { headers: BROWSER_HEADERS })
     .then(function (page) {
       if (!page) {
@@ -303,7 +300,7 @@ function resolveTvarticlesPage(tvarticlesUrl, options) {
         return null;
       }
       if (VKPRIME_RE.test(iframeUrl) || VKSPEED_RE.test(iframeUrl)) {
-        return resolveVkPlayerAdapter(iframeUrl, tvarticlesUrl, { fetchImpl: fetchImpl, runtimeMinutes: runtimeMinutes });
+        return resolveVkPlayerAdapter(iframeUrl, tvarticlesUrl, { fetchImpl: fetchImpl });
       }
       if (FLOW_RE.test(iframeUrl)) {
         return resolveFlowPlayer(iframeUrl, tvarticlesUrl, { fetchImpl: fetchImpl });
@@ -345,7 +342,7 @@ function resolveFromEpisodeUrls(fetchImpl, episodeUrls, request) {
     }
     return Promise.all(
       allTvarticlesUrls.map(function (url) {
-        return resolveTvarticlesPage(url, { fetchImpl: fetchImpl, runtimeMinutes: request.runtimeMinutes || 0 });
+        return resolveTvarticlesPage(url, { fetchImpl: fetchImpl });
       }),
     ).then(function (resolved) {
       return dedupeStreams(resolved);

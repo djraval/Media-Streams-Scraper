@@ -7,7 +7,7 @@ import { resolveFetch, fetchText, fetchContentLength } from "../lib/http.js";
 import { dedupe, dedupeStreams, isPlaceholderUrl, embedHostRegex, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
-import { toNuvioStream, formatBytes, estimateQualityFromSize } from "../lib/format.js";
+import { toNuvioStream, formatBytes } from "../lib/format.js";
 
 // ---------------------------------------------------------------------------
 // Layer 0: Site configuration constants
@@ -120,7 +120,7 @@ function episodePageCandidates(markup, request) {
 // 4. Filter placeholder URLs, take the best (highest quality) source per iframe
 // 5. Fetch content-length for size display
 // 6. Decorate with backend/name/sourceTag fields for toNuvioStream
-function resolveFromEpisodeUrls(fetchImpl, episodeUrls, runtimeMinutes) {
+function resolveFromEpisodeUrls(fetchImpl, episodeUrls) {
   if (episodeUrls.length === 0) {
     return Promise.resolve([]);
   }
@@ -161,14 +161,14 @@ function resolveFromEpisodeUrls(fetchImpl, episodeUrls, runtimeMinutes) {
               quality: best.quality || "unknown",
               url: best.url,
               size: "",
+              sizeBytes: 0,
               duration: 0,
               sourceTag: "",
               headers: best.headers,
             };
             return fetchContentLength(fetchImpl, best.url, best.headers).then(function (sizeBytes) {
               stream.size = formatBytes(sizeBytes);
-              var estimated = estimateQualityFromSize(sizeBytes, runtimeMinutes);
-              if (estimated) stream.quality = estimated;
+              stream.sizeBytes = sizeBytes;
               return stream;
             });
           })
@@ -198,7 +198,7 @@ function processArchive(fetchImpl, archiveUrls, request, index) {
       if (episodeUrls.length === 0) {
         return processArchive(fetchImpl, archiveUrls, request, index + 1);
       }
-      return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request.runtimeMinutes || 0).then(function (streams) {
+      return resolveFromEpisodeUrls(fetchImpl, episodeUrls).then(function (streams) {
         if (streams.length > 0) {
           return streams;
         }
@@ -228,7 +228,7 @@ function resolveDesiTVSerials(request, options) {
         })
       );
       if (episodeUrls.length > 0) {
-        return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request.runtimeMinutes || 0);
+        return resolveFromEpisodeUrls(fetchImpl, episodeUrls);
       }
       return processArchive(fetchImpl, archiveUrls, request, 0);
     });

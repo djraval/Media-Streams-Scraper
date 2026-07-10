@@ -8,7 +8,7 @@ import { resolveFetch, browserHeaders, fetchText, fetchTextTimeout, fetchContent
 import { dedupe, dedupeStreams, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, slugCandidates } from "../lib/tmdb.js";
 import { unpack } from "../lib/packer.js";
-import { formatBytes, toNuvioStream, estimateQualityFromSize } from "../lib/format.js";
+import { formatBytes, toNuvioStream } from "../lib/format.js";
 
 // MixDrop domains — the site frequently changes its primary domain.
 var MIXDROP_DOMAINS = [
@@ -113,7 +113,6 @@ function detectQuality(text) {
 function resolveMixDrop(embedUrl, refererUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  var runtimeMinutes = options.runtimeMinutes || 0;
   var url = normalizeMixDropUrl(embedUrl);
   var fileId = mixDropId(url);
 
@@ -172,6 +171,7 @@ function resolveMixDrop(embedUrl, refererUrl, options) {
         quality: quality || "unknown",
         url: mp4Url,
         size: "",
+        sizeBytes: 0,
         duration: 0,
         sourceTag: "",
         headers: headers,
@@ -179,8 +179,7 @@ function resolveMixDrop(embedUrl, refererUrl, options) {
       };
       return fetchContentLength(fetchImpl, mp4Url, headers).then(function (sizeBytes) {
         stream.size = formatBytes(sizeBytes);
-        var estimated = estimateQualityFromSize(sizeBytes, runtimeMinutes);
-        if (estimated) stream.quality = estimated;
+        stream.sizeBytes = sizeBytes;
         return stream;
       });
     })
@@ -438,7 +437,7 @@ function buildMoviePageUrls(request) {
 
 // ponytail: race page URLs with short timeout, stop once any page yields embeds.
 // Firing every year/slug variant and waiting for all hangs (~120s on CF dead ends).
-function resolveFromEpisodePages(fetchImpl, episodeUrls, runtimeMinutes) {
+function resolveFromEpisodePages(fetchImpl, episodeUrls) {
   if (episodeUrls.length === 0) {
     return Promise.resolve([]);
   }
@@ -452,7 +451,7 @@ function resolveFromEpisodePages(fetchImpl, episodeUrls, runtimeMinutes) {
     if (allEmbeds.length === 0) return Promise.resolve([]);
     return Promise.all(
       allEmbeds.map(function (embed) {
-        return resolveMixDrop(embed.url, WATCH_MOVIES_BASE, { fetchImpl: fetchImpl, runtimeMinutes: runtimeMinutes })
+        return resolveMixDrop(embed.url, WATCH_MOVIES_BASE, { fetchImpl: fetchImpl })
           .then(function (stream) {
             if (stream && embed.quality && stream.quality === "unknown") {
               stream.quality = embed.quality;
@@ -498,12 +497,12 @@ function resolveMixDropDesi(request, options) {
   // Movie path: build movie page URLs (no season/episode)
   if (request.mediaType === "movie") {
     var movieUrls = buildMoviePageUrls(request);
-    return resolveFromEpisodePages(fetchImpl, movieUrls, request.runtimeMinutes || 0);
+    return resolveFromEpisodePages(fetchImpl, movieUrls);
   }
 
   // TV path (existing logic)
   var episodeUrls = buildEpisodePageUrls(request);
-  return resolveFromEpisodePages(fetchImpl, episodeUrls, request.runtimeMinutes || 0);
+  return resolveFromEpisodePages(fetchImpl, episodeUrls);
 }
 
 // ---------------------------------------------------------------------------

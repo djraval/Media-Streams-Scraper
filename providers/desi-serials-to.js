@@ -513,6 +513,9 @@ function mediaLabel(request) {
   return episodeLabel(request);
 }
 function toNuvioStream(request, stream) {
+  var estimated = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
+  if (estimated)
+    stream.quality = estimated;
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {
@@ -618,7 +621,6 @@ function findPlayerIframe(markup) {
 function resolveVkPlayerAdapter(embedUrl, refererUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  var runtimeMinutes = options.runtimeMinutes || 0;
   return resolveVkPlayer(embedUrl, refererUrl, { fetchImpl }).then(function(sources) {
     if (!sources || sources.length === 0) {
       return null;
@@ -638,15 +640,14 @@ function resolveVkPlayerAdapter(embedUrl, refererUrl, options) {
       quality: best.quality || "unknown",
       url: best.url,
       size: "",
+      sizeBytes: 0,
       duration: 0,
       sourceTag: "",
       headers
     };
     return fetchContentLength(fetchImpl, best.url, headers).then(function(sizeBytes) {
       stream.size = formatBytes(sizeBytes);
-      var estimated = estimateQualityFromSize(sizeBytes, runtimeMinutes);
-      if (estimated)
-        stream.quality = estimated;
+      stream.sizeBytes = sizeBytes;
       return stream;
     });
   });
@@ -741,7 +742,6 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
 function resolveTvarticlesPage(tvarticlesUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  var runtimeMinutes = options.runtimeMinutes || 0;
   return fetchText(fetchImpl, tvarticlesUrl, { headers: BROWSER_HEADERS }).then(function(page) {
     if (!page) {
       return null;
@@ -751,7 +751,7 @@ function resolveTvarticlesPage(tvarticlesUrl, options) {
       return null;
     }
     if (VKPRIME_RE.test(iframeUrl) || VKSPEED_RE.test(iframeUrl)) {
-      return resolveVkPlayerAdapter(iframeUrl, tvarticlesUrl, { fetchImpl, runtimeMinutes });
+      return resolveVkPlayerAdapter(iframeUrl, tvarticlesUrl, { fetchImpl });
     }
     if (FLOW_RE.test(iframeUrl)) {
       return resolveFlowPlayer(iframeUrl, tvarticlesUrl, { fetchImpl });
@@ -788,7 +788,7 @@ function resolveFromEpisodeUrls(fetchImpl, episodeUrls, request) {
     }
     return Promise.all(
       allTvarticlesUrls.map(function(url) {
-        return resolveTvarticlesPage(url, { fetchImpl, runtimeMinutes: request.runtimeMinutes || 0 });
+        return resolveTvarticlesPage(url, { fetchImpl });
       })
     ).then(function(resolved) {
       return dedupeStreams(resolved);

@@ -88,6 +88,9 @@ export function mediaLabel(request) {
 }
 
 export function toNuvioStream(request, stream) {
+  // ponytail: quality estimation in one place — no runtimeMinutes threading through 6 functions
+  var estimated = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
+  if (estimated) stream.quality = estimated;
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {

@@ -220,6 +220,20 @@ function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
 }
 
 // src/lib/format.js
+function estimateQualityFromSize(sizeBytes, runtimeMinutes) {
+  var bytes = Number(sizeBytes);
+  var minutes = Number(runtimeMinutes);
+  if (!Number.isFinite(bytes) || bytes <= 0)
+    return null;
+  if (!Number.isFinite(minutes) || minutes <= 0)
+    return null;
+  var mbPerMin = bytes / (1024 * 1024) / minutes;
+  if (mbPerMin < 4)
+    return "360p";
+  if (mbPerMin > 20)
+    return "1080p";
+  return "720p";
+}
 function displayBackend(backend) {
   return String(backend || "source");
 }
@@ -252,6 +266,9 @@ function mediaLabel(request) {
   return episodeLabel(request);
 }
 function toNuvioStream(request, stream) {
+  var estimated = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
+  if (estimated)
+    stream.quality = estimated;
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {
