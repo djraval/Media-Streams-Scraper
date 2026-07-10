@@ -1,7 +1,8 @@
 // MP4 resolution probe — pure JS, no Node.js modules.
-// Fetches first 64KB, parses MP4 box hierarchy to extract video resolution.
+// Fetches MP4 box hierarchy to extract video resolution.
+// Handles both faststart (moov at front) and non-faststart (moov at end) files.
 
-import { fetchBinary } from "./http.js";
+import { fetchBinary, fetchBinaryRange, fetchFileSize } from "./http.js";
 
 var CODEC_BOXES = { avc1: 1, avc3: 1, hvc1: 1, hev1: 1, hvc2: 1, shv1: 1, mp4v: 1 };
 
@@ -34,15 +35,119 @@ export function qualityFromResolution(width, height) {
   return "unknown";
 }
 
+// Main entry point: probe an MP4 URL for video resolution.
+// Returns { width, height, codec } or null.
 export function probeMp4Resolution(url, headers, rangeBytes) {
-  return fetchBinary(url, headers, rangeBytes || 65536)
-    .then(function (u8) {
-      if (!u8 || u8.length < 16) return null;
-      return parseMp4Root(u8, u8.length);
+  var chunkSize = rangeBytes || 65536;
+
+  // Step 1: Fetch a small header chunk to detect whether moov is at the front
+  // (faststart) or at the end (non-faststart).
+  return fetchBinaryRange(url, headers, 0, 255)
+    .then(function (header) {
+      if (!header || header.length < 16) {
+        // Header fetch failed — try the old approach (first 64KB) as fallback
+        return fetchBinary(url, headers, chunkSize).then(function (u8) {
+          if (!u8 || u8.length < 16) return null;
+          return parseMp4Root(u8, u8.length);
+        });
+      }
+
+      var faststart = detectFaststart(header);
+
+      if (faststart) {
+        // moov is near the beginning — fetch first chunkSize bytes and parse
+        return fetchBinary(url, headers, chunkSize).then(function (u8) {
+          if (!u8 || u8.length < 16) return null;
+          return parseMp4Root(u8, u8.length);
+        });
+      }
+
+      // Not faststart — moov is at the end of the file
+      return probeMp4FromEnd(url, headers, chunkSize);
     })
     .catch(function () { return null; });
 }
 
+// Scan top-level boxes in the header chunk to determine if moov is at the front.
+// Returns true if moov appears before mdat (faststart), false otherwise.
+function detectFaststart(header) {
+  var offset = 0;
+  var end = header.length;
+  var sawFtyp = false;
+  while (offset + 8 <= end) {
+    var size = readUint32BE(header, offset);
+    var type = readFourCC(header, offset + 4);
+    if (size < 8) break;
+    if (type === "ftyp") {
+      sawFtyp = true;
+    } else if (type === "moov") {
+      return true; // moov before mdat → faststart
+    } else if (type === "mdat" || type === "free" || type === "skip" || type === "wide") {
+      return false; // data box before moov → not faststart
+    }
+    // If the box extends beyond our header chunk, we can't see further
+    if (offset + size > end) break;
+    offset += size;
+  }
+  // Couldn't determine — assume faststart and try the front
+  return true;
+}
+
+// Probe moov from the end of the file (non-faststart MP4).
+// 1. Get total file size via Range request
+// 2. Fetch last chunkSize bytes
+// 3. Scan backwards for "moov" fourcc
+// 4. If moov extends beyond fetched data, fetch from moov start
+function probeMp4FromEnd(url, headers, chunkSize) {
+  return fetchFileSize(url, headers)
+    .then(function (totalSize) {
+      if (totalSize <= 0) return null;
+      var start = Math.max(0, totalSize - chunkSize);
+      return fetchBinaryRange(url, headers, start, totalSize - 1)
+        .then(function (u8) {
+          if (!u8 || u8.length < 16) return null;
+          var moovOffset = findMoovBackwards(u8);
+          if (moovOffset < 0) return null;
+
+          var moovSize = readUint32BE(u8, moovOffset);
+          var moovFileOffset = start + moovOffset;
+
+          // If moov box extends beyond our fetched data, re-fetch from moov start
+          if (moovOffset + moovSize > u8.length) {
+            var fetchSize = Math.min(moovSize, 262144); // cap at 256KB
+            var fetchEnd = Math.min(moovFileOffset + fetchSize - 1, totalSize - 1);
+            return fetchBinaryRange(url, headers, moovFileOffset, fetchEnd)
+              .then(function (moovData) {
+                if (!moovData || moovData.length < 16) return null;
+                return parseMoov(moovData, 8, moovData.length);
+              });
+          }
+
+          // moov fits in our data — parse it directly
+          return parseMoov(u8, moovOffset + 8, moovOffset + moovSize);
+        });
+    })
+    .catch(function () { return null; });
+}
+
+// Scan a byte array backwards for the "moov" fourcc (0x6D 0x6F 0x6F 0x76).
+// Returns the offset of the moov box start (4 bytes before the fourcc), or -1.
+// Validates that the preceding 4 bytes form a plausible box size (>= 8).
+function findMoovBackwards(u8) {
+  for (var i = u8.length - 4; i >= 4; i--) {
+    if (u8[i] === 0x6D && u8[i + 1] === 0x6F && u8[i + 2] === 0x6F && u8[i + 3] === 0x76) {
+      var boxStart = i - 4;
+      var size = readUint32BE(u8, boxStart);
+      // Size must be at least 8 (header) and not absurdly large
+      if (size >= 8 && size <= 104857600) { // 100MB sanity cap
+        return boxStart;
+      }
+    }
+  }
+  return -1;
+}
+
+// Parse top-level MP4 boxes starting at offset 0, looking for moov.
 function parseMp4Root(u8, end) {
   var offset = 0;
   while (offset + 8 <= end) {

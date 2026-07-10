@@ -154,14 +154,13 @@ node build.js --watch    # Watch mode (rebuild on change)
 
 ## Quality Detection (mp4-probe.js + hls-probe.js)
 
-### MP4 Probe
-- Fetch first 64KB with `Range: bytes=0-65535` header
-- Parse MP4 box hierarchy: `moov → trak → tkhd` (width/height at 16.16 fixed-point)
-- Also check `moov → trak → mdia → minf → stbl → stsd → avc1` (width/height as uint16)
+### MP4 Probe (two-phase)
+- **Phase 1 — faststart check**: Fetch first 64KB with `Range: bytes=0-65535`. Parse MP4 box hierarchy: `moov → trak → tkhd` (width/height at 16.16 fixed-point). Also check `moov → trak → mdia → minf → stbl → stsd → avc1` (width/height as uint16). If `moov` is found at the front, resolution is returned immediately.
+- **Phase 2 — moov-at-end fallback**: If phase 1 finds no `moov` box (non-faststart MP4), fetch the last 256KB of the file using `Range: bytes={size-262144}-{size-1}`. The `moov` box for non-faststart files is at the end. Parse the same box hierarchy from this tail chunk.
 - Uses Uint8Array with manual big-endian reading (no DataView dependency)
-- Falls back to axios if `response.arrayBuffer()` unavailable
-- 1KB is often enough (moov box at front for fast-start MP4s)
-- `qualityFromResolution(width, height)`: 2160+→4K, 1080+→1080p, 720+→720p, 480+→480p, 360+→360p
+- `fetchBinary` tries `response.bytes()` → axios (`responseType: "arraybuffer"`) → `response.arrayBuffer()` in order, since QuickJS sandbox may not implement all three
+- `fetchFileSize` uses `Content-Length` header or HEAD request to determine file size for phase 2
+- `qualityFromResolution(width, height)`: 2160+→4K, 1080+→1080p, 720+→720p, 480+→480p, <480→"unknown"
 
 ### HLS Probe
 - Master playlist: parse `#EXT-X-STREAM-INF:RESOLUTION=WxH` lines
@@ -240,10 +239,14 @@ node build.js
 # Syntax check built files
 for f in providers/*.js; do node -c "$f"; done
 
-# Test TV provider
+# Local HTTP test server (port 3000) — simulates Nuvio's provider calling convention
+npm start
+# Then: curl 'http://localhost:3000/stream?tmdbId=116479&mediaType=tv&season=1&episode=2060'
+
+# Test TV provider directly
 node -e "var p = require('./providers/desi-serials-to.js'); p.getStreams('116479', 'tv', 1, 2060).then(function(s) { console.log(s.length + ' streams'); s.forEach(function(x) { console.log('  ' + x.quality + ' ' + x.name); }); });"
 
-# Test movie provider
+# Test movie provider directly
 node -e "var p = require('./providers/mixdrop-desi.js'); p.getStreams('847742', 'movie', null, null).then(function(s) { console.log(s.length + ' streams'); s.forEach(function(x) { console.log('  ' + x.quality + ' ' + x.name); }); });"
 
 # ffmpeg probe a stream URL

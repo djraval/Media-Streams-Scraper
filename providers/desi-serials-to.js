@@ -79,13 +79,41 @@ function fetchContentLength(fetchImpl, url, headers) {
     return 0;
   });
 }
-function fetchBinaryViaAxios(url, headers, rangeBytes) {
+function fetchBinaryViaBytes(url, headers, start, end) {
+  if (typeof fetch === "undefined")
+    return null;
+  try {
+    if (typeof Response !== "undefined" && typeof Response.prototype.bytes !== "function") {
+      return null;
+    }
+  } catch (e) {
+  }
+  var rangeHeaders = Object.assign({}, headers || {}, { Range: "bytes=" + start + "-" + end });
+  return fetch(url, { headers: rangeHeaders }).then(function(response) {
+    if (!response || response.ok === false && response.status !== 206 && response.status !== 200) {
+      return null;
+    }
+    if (typeof response.bytes === "function") {
+      return response.bytes().then(function(u8) {
+        if (u8 && u8.length >= 16) {
+          return u8 instanceof Uint8Array ? u8 : new Uint8Array(u8);
+        }
+        return null;
+      }).catch(function() {
+        return null;
+      });
+    }
+    return null;
+  }).catch(function() {
+    return null;
+  });
+}
+function fetchBinaryViaAxios(url, headers, start, end) {
   try {
     var axios = require("axios");
-    var rangeEnd = (rangeBytes || 65536) - 1;
     var config = {
       responseType: "arraybuffer",
-      headers: Object.assign({}, headers || {}, { Range: "bytes=0-" + rangeEnd })
+      headers: Object.assign({}, headers || {}, { Range: "bytes=" + start + "-" + end })
     };
     return axios.get(url, config).then(function(response) {
       if (response && response.data && response.data.byteLength >= 16) {
@@ -99,10 +127,11 @@ function fetchBinaryViaAxios(url, headers, rangeBytes) {
     return null;
   }
 }
-function fetchBinaryViaFetch(url, headers, rangeBytes) {
-  var rangeEnd = (rangeBytes || 65536) - 1;
+function fetchBinaryViaFetch(url, headers, start, end) {
+  if (typeof fetch === "undefined")
+    return null;
   var rangeHeaders = Object.assign({}, headers || {}, {
-    Range: "bytes=0-" + rangeEnd
+    Range: "bytes=" + start + "-" + end
   });
   return fetch(url, { headers: rangeHeaders }).then(function(response) {
     if (!response || response.ok === false && response.status !== 206 && response.status !== 200) {
@@ -121,15 +150,61 @@ function fetchBinaryViaFetch(url, headers, rangeBytes) {
     return null;
   });
 }
+function fetchBinaryRange(url, headers, start, end) {
+  var p = fetchBinaryViaBytes(url, headers, start, end);
+  if (!p)
+    p = Promise.resolve(null);
+  return p.then(function(result) {
+    if (result)
+      return result;
+    var ap = fetchBinaryViaAxios(url, headers, start, end);
+    return ap || Promise.resolve(null);
+  }).then(function(result) {
+    if (result)
+      return result;
+    var fp = fetchBinaryViaFetch(url, headers, start, end);
+    return fp || Promise.resolve(null);
+  }).then(function(result) {
+    return result || null;
+  });
+}
 function fetchBinary(url, headers, rangeBytes) {
-  var axiosResult = fetchBinaryViaAxios(url, headers, rangeBytes);
-  if (axiosResult) {
-    return axiosResult;
-  }
+  var end = (rangeBytes || 65536) - 1;
+  return fetchBinaryRange(url, headers, 0, end);
+}
+function fetchFileSize(url, headers) {
+  var rangeHeaders = Object.assign({}, headers || {}, { Range: "bytes=0-0" });
   if (typeof fetch !== "undefined") {
-    return fetchBinaryViaFetch(url, headers, rangeBytes);
+    return fetch(url, { headers: rangeHeaders }).then(function(response) {
+      if (!response)
+        return 0;
+      var cr = response.headers && response.headers.get("content-range") || "";
+      var match = cr.match(/\/(\d+)$/);
+      if (match)
+        return Number(match[1]);
+      var cl = response.headers && response.headers.get("content-length") || "";
+      return Number(cl) || 0;
+    }).catch(function() {
+      return 0;
+    });
   }
-  return Promise.resolve(null);
+  try {
+    var axios = require("axios");
+    return axios.head(url, { headers: rangeHeaders }).then(function(response) {
+      if (!response || !response.headers)
+        return 0;
+      var cr = response.headers["content-range"] || "";
+      var match = cr.match(/\/(\d+)$/);
+      if (match)
+        return Number(match[1]);
+      var cl = response.headers["content-length"] || "";
+      return Number(cl) || 0;
+    }).catch(function() {
+      return 0;
+    });
+  } catch (e) {
+    return Promise.resolve(0);
+  }
 }
 
 // src/lib/html.js
@@ -545,13 +620,89 @@ function qualityFromResolution(width, height) {
   return "unknown";
 }
 function probeMp4Resolution(url, headers, rangeBytes) {
-  return fetchBinary(url, headers, rangeBytes || 65536).then(function(u8) {
-    if (!u8 || u8.length < 16)
-      return null;
-    return parseMp4Root(u8, u8.length);
+  var chunkSize = rangeBytes || 65536;
+  return fetchBinaryRange(url, headers, 0, 255).then(function(header) {
+    if (!header || header.length < 16) {
+      return fetchBinary(url, headers, chunkSize).then(function(u8) {
+        if (!u8 || u8.length < 16)
+          return null;
+        return parseMp4Root(u8, u8.length);
+      });
+    }
+    var faststart = detectFaststart(header);
+    if (faststart) {
+      return fetchBinary(url, headers, chunkSize).then(function(u8) {
+        if (!u8 || u8.length < 16)
+          return null;
+        return parseMp4Root(u8, u8.length);
+      });
+    }
+    return probeMp4FromEnd(url, headers, chunkSize);
   }).catch(function() {
     return null;
   });
+}
+function detectFaststart(header) {
+  var offset = 0;
+  var end = header.length;
+  var sawFtyp = false;
+  while (offset + 8 <= end) {
+    var size = readUint32BE(header, offset);
+    var type = readFourCC(header, offset + 4);
+    if (size < 8)
+      break;
+    if (type === "ftyp") {
+      sawFtyp = true;
+    } else if (type === "moov") {
+      return true;
+    } else if (type === "mdat" || type === "free" || type === "skip" || type === "wide") {
+      return false;
+    }
+    if (offset + size > end)
+      break;
+    offset += size;
+  }
+  return true;
+}
+function probeMp4FromEnd(url, headers, chunkSize) {
+  return fetchFileSize(url, headers).then(function(totalSize) {
+    if (totalSize <= 0)
+      return null;
+    var start = Math.max(0, totalSize - chunkSize);
+    return fetchBinaryRange(url, headers, start, totalSize - 1).then(function(u8) {
+      if (!u8 || u8.length < 16)
+        return null;
+      var moovOffset = findMoovBackwards(u8);
+      if (moovOffset < 0)
+        return null;
+      var moovSize = readUint32BE(u8, moovOffset);
+      var moovFileOffset = start + moovOffset;
+      if (moovOffset + moovSize > u8.length) {
+        var fetchSize = Math.min(moovSize, 262144);
+        var fetchEnd = Math.min(moovFileOffset + fetchSize - 1, totalSize - 1);
+        return fetchBinaryRange(url, headers, moovFileOffset, fetchEnd).then(function(moovData) {
+          if (!moovData || moovData.length < 16)
+            return null;
+          return parseMoov(moovData, 8, moovData.length);
+        });
+      }
+      return parseMoov(u8, moovOffset + 8, moovOffset + moovSize);
+    });
+  }).catch(function() {
+    return null;
+  });
+}
+function findMoovBackwards(u8) {
+  for (var i = u8.length - 4; i >= 4; i--) {
+    if (u8[i] === 109 && u8[i + 1] === 111 && u8[i + 2] === 111 && u8[i + 3] === 118) {
+      var boxStart = i - 4;
+      var size = readUint32BE(u8, boxStart);
+      if (size >= 8 && size <= 104857600) {
+        return boxStart;
+      }
+    }
+  }
+  return -1;
 }
 function parseMp4Root(u8, end) {
   var offset = 0;
