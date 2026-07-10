@@ -79,7 +79,7 @@ async function check(provider, maxRequests, hasCanonical) {
 
 (async function () {
   var mp4 = await check("desi-serials-to", 7);
-  assert.strictEqual(mp4[0].quality, "720p • 1.1 Mbps");
+  assert.strictEqual(mp4[0].quality, "1.1 Mbps");
   assert.strictEqual(mp4[0].size, "477 MB");
   var flow = await check("desi-flow", 7);
   assert.strictEqual(flow[0].quality, "480p • 0.80 Mbps");

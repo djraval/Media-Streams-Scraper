@@ -18,7 +18,7 @@ src/
     tmdb.js              # buildMediaRequest, slugCandidates, episodeDateSlug
     packer.js            # Dean Edwards P.A.C.K.E.R. unpack, JuicyCodes decoder, base64
     vkplayer.js          # resolveVkPlayer (provisional quality only — JW labels lie)
-    format.js            # formatBytes, formatDuration, toNuvioStream, bitrateLabel, estimateQualityFromSize
+    format.js            # formatBytes, formatDuration, toNuvioStream, bitrateLabel
   desi-serials-to/       # VkPrime/VkSpeed/Flow from desi-serials.to (TV only)
   desitvserials-se/      # VkPrime/VkSpeed from desitvserials.se (TV only)
   desiruleztv-net/       # VkPrime/VkSpeed from desiruleztv.net (TV only)
@@ -163,19 +163,25 @@ JW Player labels are **unreliable** (says "360p" for both real 360p and real 720
 Binary MP4 probing is **impossible in Nuvio** (no axios, no arrayBuffer — fetch is text-only).
 Strategy: show **resolution + bitrate** in `quality`; use Nuvio's separate `size` field for size.
 
+**Resolution is NOT estimated from bitrate.** A 720p file at 1.5 Mbps is still 720p
+(just heavily compressed) — bitrate is a quality indicator, not a resolution indicator.
+Providers set `stream.quality` from filename/page labels; Flow uses manifest `RESOLUTION`.
+Bitrate and size are shown separately so users can judge actual visual quality.
+
 `toNuvioStream` in `src/lib/format.js`:
-- MP4 resolution is estimated from MB/min; bitrate and size use CDN Content-Length
-- Flow resolution and bitrate use master-manifest `RESOLUTION` + `BANDWIDTH`; size is estimated from bandwidth × TMDB runtime (no "est." suffix — kept clean)
+- Resolution: from provider's `stream.quality` (filename label, page label, or HLS manifest)
+- Bitrate: from CDN Content-Length + TMDB runtime (MP4), or manifest BANDWIDTH (Flow HLS)
+- Size: from CDN Content-Length (MP4), or bandwidth × TMDB runtime (Flow HLS)
 - Quality example: `"720p • 1.9 Mbps"`; separate size example: `"822 MB"`
-- **Unknown-resolution fallback**: falsy/empty/`"0"`/`"unknown"` resolution values are dropped from the `quality` parts array. If bitrate is still available, quality shows just the bitrate (e.g. `"1.1 Mbps"`). If neither is available, quality falls back to `"unknown"` — never `undefined`, `""`, or `"0"`. Title always renders cleanly.
+- Vk streams show just bitrate (e.g. `"1.9 Mbps"`) since JW labels are unreliable
+- **Unknown-resolution fallback**: falsy/empty/`"0"`/`"unknown"` resolution values are dropped from the `quality` parts array. If bitrate is still available, quality shows just the bitrate. If neither is available, quality falls back to `"unknown"` — never `undefined`, `""`, or `"0"`. Title always renders cleanly.
 
 | Source | Quality source | Notes |
 |--------|----------------|-------|
-| **VkSpeed/VkPrime MP4** | resolution + bitrate; separate exact size | No binary fetch needed |
-| **MixDrop MP4** | resolution + bitrate; separate exact size | Filename label kept if estimation returns null |
+| **VkSpeed/VkPrime MP4** | bitrate only; separate exact size | JW labels ignored — resolution unknown without binary probe |
+| **MixDrop MP4** | filename label + bitrate; separate exact size | Label from page text near embed link |
 | **Flow HLS** | master `RESOLUTION` + `BANDWIDTH`; separate estimated size | No segment sampling |
 | **StreamTape** | page resolution + CDN Content-Length bitrate/size | One Range 0-0 request |
-| **Fallback** | Keep provisional label if estimation returns null | `unknown` for Vk, filename label for MixDrop |
 
 ## Scraping Robustness Patterns
 

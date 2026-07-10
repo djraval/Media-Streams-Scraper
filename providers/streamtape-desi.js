@@ -281,20 +281,6 @@ function bitrateLabel(sizeBytes, runtimeMinutes) {
     return null;
   return formatMbps(bytes * 8 / (minutes * 60) / 1e6);
 }
-function estimateQualityFromSize(sizeBytes, runtimeMinutes) {
-  var bytes = Number(sizeBytes);
-  var minutes = Number(runtimeMinutes);
-  if (!Number.isFinite(bytes) || bytes <= 0)
-    return null;
-  if (!Number.isFinite(minutes) || minutes <= 0)
-    return null;
-  var mbPerMin = bytes / (1024 * 1024) / minutes;
-  if (mbPerMin < 4)
-    return "360p";
-  if (mbPerMin > 20)
-    return "1080p";
-  return "720p";
-}
 function displayBackend(backend) {
   return String(backend || "source");
 }
@@ -327,7 +313,7 @@ function mediaLabel(request) {
   return episodeLabel(request);
 }
 function toNuvioStream(request, stream) {
-  var resolution = stream.bandwidth ? stream.quality : estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
+  var resolution = stream.quality;
   var bitrate = stream.bandwidth ? formatMbps(stream.bandwidth / 1e6) : bitrateLabel(stream.sizeBytes, request.runtimeMinutes);
   if (stream.bandwidth && request.runtimeMinutes && !stream.size) {
     stream.size = formatBytes(stream.bandwidth * request.runtimeMinutes * 60 / 8);
