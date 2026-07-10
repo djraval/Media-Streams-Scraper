@@ -58,6 +58,24 @@ function fetchJson(fetchImpl, url) {
     return response.json();
   });
 }
+function fetchContentLength(fetchImpl, url, headers) {
+  return fetchImpl(url, { method: "GET", headers: Object.assign({}, headers || {}, { Range: "bytes=0-0" }) }).then(function(response) {
+    if (!response || response.ok === false)
+      return 0;
+    var cr = response.headers && response.headers.get("content-range") || "";
+    var match = cr.match(/\/(\d+)$/);
+    if (match) {
+      if (typeof response.arrayBuffer === "function") {
+        response.arrayBuffer().catch(function() {
+        });
+      }
+      return Number(match[1]);
+    }
+    return Number(response.headers && response.headers.get("content-length") || 0) || 0;
+  }).catch(function() {
+    return 0;
+  });
+}
 
 // src/lib/html.js
 function dedupe(values) {
@@ -233,6 +251,27 @@ function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
 }
 
 // src/lib/format.js
+function formatBytes(bytes) {
+  var value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0)
+    return "";
+  var units = ["B", "KB", "MB", "GB", "TB"];
+  var size = value;
+  var index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  var digits = size >= 100 || index === 0 ? 0 : size >= 10 ? 1 : 2;
+  return size.toFixed(digits) + " " + units[index];
+}
+function formatMbps(mbps) {
+  if (mbps >= 10)
+    return mbps.toFixed(0) + " Mbps";
+  if (mbps >= 1)
+    return mbps.toFixed(1) + " Mbps";
+  return mbps.toFixed(2) + " Mbps";
+}
 function bitrateLabel(sizeBytes, runtimeMinutes) {
   var bytes = Number(sizeBytes);
   var minutes = Number(runtimeMinutes);
@@ -240,12 +279,7 @@ function bitrateLabel(sizeBytes, runtimeMinutes) {
     return null;
   if (!Number.isFinite(minutes) || minutes <= 0)
     return null;
-  var mbps = bytes * 8 / (minutes * 60) / 1e6;
-  if (mbps >= 10)
-    return mbps.toFixed(0) + " Mbps";
-  if (mbps >= 1)
-    return mbps.toFixed(1) + " Mbps";
-  return mbps.toFixed(2) + " Mbps";
+  return formatMbps(bytes * 8 / (minutes * 60) / 1e6);
 }
 function estimateQualityFromSize(sizeBytes, runtimeMinutes) {
   var bytes = Number(sizeBytes);
@@ -293,17 +327,22 @@ function mediaLabel(request) {
   return episodeLabel(request);
 }
 function toNuvioStream(request, stream) {
-  var resolution = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
-  var bitrate = bitrateLabel(stream.sizeBytes, request.runtimeMinutes);
+  var resolution = stream.bandwidth ? stream.quality : estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
+  var bitrate = stream.bandwidth ? formatMbps(stream.bandwidth / 1e6) : bitrateLabel(stream.sizeBytes, request.runtimeMinutes);
+  if (stream.bandwidth && request.runtimeMinutes && !stream.size) {
+    stream.size = formatBytes(stream.bandwidth * request.runtimeMinutes * 60 / 8);
+  }
+  var hasRes = resolution && String(resolution) !== "0" && String(resolution).toLowerCase() !== "unknown";
   var parts = [];
-  if (resolution)
+  if (hasRes)
     parts.push(resolution);
   if (bitrate)
     parts.push(bitrate);
-  if (stream.size)
-    parts.push(stream.size);
-  if (parts.length > 0)
+  if (parts.length > 0) {
     stream.quality = parts.join(" \u2022 ");
+  } else {
+    stream.quality = "unknown";
+  }
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {
@@ -695,18 +734,25 @@ function resolveStreamTapeFromPages(fetchImpl, pages) {
         if (!resolved || !resolved.cdnUrl) {
           return null;
         }
-        return {
+        var headers = {
+          Referer: resolved.embedUrl,
+          "User-Agent": UA
+        };
+        var stream = {
           kind: "mp4",
           quality: entry.quality,
           url: resolved.cdnUrl,
           size: "",
+          sizeBytes: 0,
           duration: 0,
           sourceTag: "",
-          headers: {
-            Referer: resolved.embedUrl,
-            "User-Agent": UA
-          }
+          headers
         };
+        return fetchContentLength(fetchImpl, resolved.cdnUrl, headers).then(function(sizeBytes) {
+          stream.size = formatBytes(sizeBytes);
+          stream.sizeBytes = sizeBytes;
+          return stream;
+        });
       }).catch(function() {
         return null;
       });

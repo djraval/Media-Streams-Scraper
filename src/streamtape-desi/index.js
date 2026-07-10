@@ -4,10 +4,10 @@
 // substring offsets → get_video URL → 302 redirect → CDN MP4.
 
 import { UA, BROWSER_HEADERS, TMDB_API_KEY } from "../lib/constants.js";
-import { resolveFetch, fetchFirstResult, browserHeaders } from "../lib/http.js";
+import { resolveFetch, fetchFirstResult, fetchContentLength, browserHeaders } from "../lib/http.js";
 import { dedupe, dedupeStreams, decodeText, links } from "../lib/html.js";
 import { buildMediaRequest, slugCandidates } from "../lib/tmdb.js";
-import { toNuvioStream } from "../lib/format.js";
+import { formatBytes, toNuvioStream } from "../lib/format.js";
 
 // ---------------------------------------------------------------------------
 // Layer 0: Configuration constants
@@ -556,18 +556,25 @@ function resolveStreamTapeFromPages(fetchImpl, pages) {
           if (!resolved || !resolved.cdnUrl) {
             return null;
           }
-          return {
+          var headers = {
+            Referer: resolved.embedUrl,
+            "User-Agent": UA,
+          };
+          var stream = {
             kind: "mp4",
             quality: entry.quality,
             url: resolved.cdnUrl,
             size: "",
+            sizeBytes: 0,
             duration: 0,
             sourceTag: "",
-            headers: {
-              Referer: resolved.embedUrl,
-              "User-Agent": UA,
-            },
+            headers: headers,
           };
+          return fetchContentLength(fetchImpl, resolved.cdnUrl, headers).then(function (sizeBytes) {
+            stream.size = formatBytes(sizeBytes);
+            stream.sizeBytes = sizeBytes;
+            return stream;
+          });
         })
         .catch(function () { return null; });
     })

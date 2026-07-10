@@ -161,21 +161,20 @@ node build.js --watch    # Watch mode (rebuild on change)
 
 JW Player labels are **unreliable** (says "360p" for both real 360p and real 720p).
 Binary MP4 probing is **impossible in Nuvio** (no axios, no arrayBuffer — fetch is text-only).
-Strategy: **show resolution guess + actual bitrate + size** combined in the quality field.
+Strategy: show **resolution + bitrate** in `quality`; use Nuvio's separate `size` field for size.
 
-`toNuvioStream` in `src/lib/format.js` combines three pieces:
-- `estimateQualityFromSize(sizeBytes, runtimeMinutes)` — resolution guess from MB/min (< 4→360p, 4-20→720p, >20→1080p)
-- `bitrateLabel(sizeBytes, runtimeMinutes)` — actual Mbps = `(bytes*8)/(min*60)/1e6`
-- `stream.size` — formatted file size (e.g. "822 MB")
-- Joined with " • " → e.g. `"720p • 1.9 Mbps • 822 MB"`
-- Returns `null` if size or runtime unavailable → keeps existing label
+`toNuvioStream` in `src/lib/format.js`:
+- MP4 resolution is estimated from MB/min; bitrate and size use CDN Content-Length
+- Flow resolution and bitrate use master-manifest `RESOLUTION` + `BANDWIDTH`; size is estimated from bandwidth × TMDB runtime (no "est." suffix — kept clean)
+- Quality example: `"720p • 1.9 Mbps"`; separate size example: `"822 MB"`
+- **Unknown-resolution fallback**: falsy/empty/`"0"`/`"unknown"` resolution values are dropped from the `quality` parts array. If bitrate is still available, quality shows just the bitrate (e.g. `"1.1 Mbps"`). If neither is available, quality falls back to `"unknown"` — never `undefined`, `""`, or `"0"`. Title always renders cleanly.
 
 | Source | Quality source | Notes |
 |--------|----------------|-------|
-| **VkSpeed/VkPrime MP4** | resolution + bitrate + size | No binary fetch needed |
-| **MixDrop MP4** | resolution + bitrate + size | Filename label kept if estimation returns null |
-| **Flow HLS** | Master playlist `RESOLUTION=WxH` | e.g. `720x480` → `480p` (no binary) |
-| **StreamTape** | Page-link text near "Streamtape" | Single quality per upload |
+| **VkSpeed/VkPrime MP4** | resolution + bitrate; separate exact size | No binary fetch needed |
+| **MixDrop MP4** | resolution + bitrate; separate exact size | Filename label kept if estimation returns null |
+| **Flow HLS** | master `RESOLUTION` + `BANDWIDTH`; separate estimated size | No segment sampling |
+| **StreamTape** | page resolution + CDN Content-Length bitrate/size | One Range 0-0 request |
 | **Fallback** | Keep provisional label if estimation returns null | `unknown` for Vk, filename label for MixDrop |
 
 ## Scraping Robustness Patterns

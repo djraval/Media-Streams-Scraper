@@ -32,15 +32,18 @@ export function formatDuration(seconds) {
 }
 
 // Bitrate label from file size + runtime.
+function formatMbps(mbps) {
+  if (mbps >= 10) return mbps.toFixed(0) + " Mbps";
+  if (mbps >= 1) return mbps.toFixed(1) + " Mbps";
+  return mbps.toFixed(2) + " Mbps";
+}
+
 export function bitrateLabel(sizeBytes, runtimeMinutes) {
   var bytes = Number(sizeBytes);
   var minutes = Number(runtimeMinutes);
   if (!Number.isFinite(bytes) || bytes <= 0) return null;
   if (!Number.isFinite(minutes) || minutes <= 0) return null;
-  var mbps = (bytes * 8) / (minutes * 60) / 1000000;
-  if (mbps >= 10) return mbps.toFixed(0) + " Mbps";
-  if (mbps >= 1) return mbps.toFixed(1) + " Mbps";
-  return mbps.toFixed(2) + " Mbps";
+  return formatMbps((bytes * 8) / (minutes * 60) / 1000000);
 }
 
 // Resolution guess from file size + runtime (bitrate heuristic).
@@ -91,14 +94,21 @@ export function mediaLabel(request) {
 }
 
 export function toNuvioStream(request, stream) {
-  // ponytail: combine resolution guess + actual bitrate + size in quality field
-  var resolution = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
-  var bitrate = bitrateLabel(stream.sizeBytes, request.runtimeMinutes);
+  var resolution = stream.bandwidth ? stream.quality : estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
+  var bitrate = stream.bandwidth ? formatMbps(stream.bandwidth / 1000000) : bitrateLabel(stream.sizeBytes, request.runtimeMinutes);
+  if (stream.bandwidth && request.runtimeMinutes && !stream.size) {
+    stream.size = formatBytes(stream.bandwidth * request.runtimeMinutes * 60 / 8);
+  }
+  // Normalize resolution: drop falsy/empty/"0"/"unknown" → we'll fallback later
+  var hasRes = resolution && String(resolution) !== "0" && String(resolution).toLowerCase() !== "unknown";
   var parts = [];
-  if (resolution) parts.push(resolution);
+  if (hasRes) parts.push(resolution);
   if (bitrate) parts.push(bitrate);
-  if (stream.size) parts.push(stream.size);
-  if (parts.length > 0) stream.quality = parts.join(" • ");
+  if (parts.length > 0) {
+    stream.quality = parts.join(" • ");
+  } else {
+    stream.quality = "unknown";
+  }
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {

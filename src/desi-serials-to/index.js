@@ -280,7 +280,9 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
           variants.length > 0 && variants[0].height > 0
             ? variants[0].height + "p"
             : hlsQualityFromManifest(manifest);
-        return buildFlowStream(quality, "", 0, playerUrl, streamHeaders, masterUrl);
+        var stream = buildFlowStream(quality, "", 0, playerUrl, streamHeaders, masterUrl);
+        stream.bandwidth = variants.length > 0 ? variants[0].bandwidth : 0;
+        return stream;
       });
     });
 }

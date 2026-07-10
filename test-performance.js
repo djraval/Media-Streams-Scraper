@@ -24,10 +24,15 @@ function fakeFetchFor(provider, hasCanonical) {
       return response(url, JSON.stringify({ name: "Test Show", networks: [{ name: "Netflix" }], episode_run_time: [60] }), 200);
     }
 
-    if (provider === "desi-serials-to") {
+    if (provider === "desi-serials-to" || provider === "desi-flow") {
       if (url.indexOf("/?s=test-show+") !== -1) return response(url, '<a href="https://www.desi-serials.to/test-show-episode-2nd-january-2025-watch-online/1/">episode</a>', 200);
       if (url.indexOf("/test-show-episode-") !== -1) return response(url, '<a href="https://tvarticles.org/vidd.php?id=1">player</a>', 200);
-      if (url.indexOf("tvarticles.org/vidd.php?id=1") !== -1) return response(url, '<iframe src="https://vkspeed.com/embed-test.html"></iframe>', 200);
+      if (url.indexOf("tvarticles.org/vidd.php?id=1") !== -1) {
+        var player = provider === "desi-flow" ? "https://flow.tvlogy.to/embed020A/test/" : "https://vkspeed.com/embed-test.html";
+        return response(url, '<iframe src="' + player + '"></iframe>', 200);
+      }
+      if (url.indexOf("flow.tvlogy.to/embed020A/test/") !== -1) return response(url, 'https://hls.test/master.m3u8', 200);
+      if (url.indexOf("hls.test/master.m3u8") !== -1) return response(url, '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=720x480\nvideo.m3u8', 200);
     }
 
     if (provider === "desiruleztv-net") {
@@ -47,10 +52,14 @@ function fakeFetchFor(provider, hasCanonical) {
       return response(url, "x", 206, { "content-range": "bytes 0-0/500000000" });
     }
 
-    if (hasCanonical !== false && (provider === "mixdrop-desi" || provider === "streamtape-desi") &&
+    if (hasCanonical !== false && (provider === "mixdrop-desi" || provider === "streamtape-desi" || provider === "streamtape-size") &&
         url.indexOf("test-show-2025-ep-09-hindi-season-1-watch-online-hd-print-free-download/") !== -1) {
-      return response(url, "<html>canonical episode page without this host</html>", 200);
+      var page = provider === "streamtape-size" ? '<a href="https://streamtape.com/v/abc">Streamtape 720p</a>' : "<html>canonical episode page without this host</html>";
+      return response(url, page, 200);
     }
+    if (provider === "streamtape-size" && url.indexOf("streamtape.com/v/abc") !== -1) return response(url, "getElementById('norobotlink').innerHTML = '//streamtape.com/get_video?id=' + ('xxxxabc').substring(4)", 200);
+    if (provider === "streamtape-size" && url.indexOf("streamtape.com/get_video") !== -1) return response(url, "", 302, { location: "https://cdn.test/stream.mp4" });
+    if (provider === "streamtape-size" && url.indexOf("cdn.test/stream.mp4") !== -1) return response(url, "x", 206, { "content-range": "bytes 0-0/500000000" });
     if (url.indexOf("ulluhd.com/") !== -1) return response(url, "<html></html>", 200);
     return response(url, "", 404);
   }
@@ -60,18 +69,28 @@ function fakeFetchFor(provider, hasCanonical) {
 
 async function check(provider, maxRequests, hasCanonical) {
   var fakeFetch = fakeFetchFor(provider, hasCanonical);
+  var moduleName = provider === "desi-flow" ? "desi-serials-to" : provider === "streamtape-size" ? "streamtape-desi" : provider;
   global.fetch = fakeFetch;
-  delete require.cache[require.resolve("./providers/" + provider + ".js")];
-  await require("./providers/" + provider + ".js").getStreams("1", "tv", 1, 9);
+  delete require.cache[require.resolve("./providers/" + moduleName + ".js")];
+  var streams = await require("./providers/" + moduleName + ".js").getStreams("1", "tv", 1, 9);
   assert(fakeFetch.calls.length <= maxRequests, provider + " made " + fakeFetch.calls.length + " requests; expected <= " + maxRequests);
+  return streams;
 }
 
 (async function () {
-  await check("desi-serials-to", 7);
+  var mp4 = await check("desi-serials-to", 7);
+  assert.strictEqual(mp4[0].quality, "720p • 1.1 Mbps");
+  assert.strictEqual(mp4[0].size, "477 MB");
+  var flow = await check("desi-flow", 7);
+  assert.strictEqual(flow[0].quality, "480p • 0.80 Mbps");
+  assert.strictEqual(flow[0].size, "343 MB");
   await check("desiruleztv-net", 6);
   await check("desitvserials-se", 6);
   await check("mixdrop-desi", 4);
   await check("streamtape-desi", 7);
+  var streamtape = await check("streamtape-size", 7);
+  assert.strictEqual(streamtape[0].quality, "720p • 1.1 Mbps");
+  assert.strictEqual(streamtape[0].size, "477 MB");
   await check("mixdrop-desi", 10, false);
   await check("streamtape-desi", 12, false);
   console.log("performance request-budget checks passed");
