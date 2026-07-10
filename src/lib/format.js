@@ -31,8 +31,7 @@ export function formatDuration(seconds) {
   return s + "s";
 }
 
-// Bitrate label from file size + runtime. More honest than guessing "720p"
-// from bitrate — the user sees the actual Mbps.
+// Bitrate label from file size + runtime.
 export function bitrateLabel(sizeBytes, runtimeMinutes) {
   var bytes = Number(sizeBytes);
   var minutes = Number(runtimeMinutes);
@@ -42,6 +41,19 @@ export function bitrateLabel(sizeBytes, runtimeMinutes) {
   if (mbps >= 10) return mbps.toFixed(0) + " Mbps";
   if (mbps >= 1) return mbps.toFixed(1) + " Mbps";
   return mbps.toFixed(2) + " Mbps";
+}
+
+// Resolution guess from file size + runtime (bitrate heuristic).
+// ponytail: rough thresholds — can't probe real resolution in Nuvio (no binary fetch)
+export function estimateQualityFromSize(sizeBytes, runtimeMinutes) {
+  var bytes = Number(sizeBytes);
+  var minutes = Number(runtimeMinutes);
+  if (!Number.isFinite(bytes) || bytes <= 0) return null;
+  if (!Number.isFinite(minutes) || minutes <= 0) return null;
+  var mbPerMin = bytes / (1024 * 1024) / minutes;
+  if (mbPerMin < 4) return "360p";
+  if (mbPerMin > 20) return "1080p";
+  return "720p";
 }
 
 export function displayBackend(backend) {
@@ -79,9 +91,14 @@ export function mediaLabel(request) {
 }
 
 export function toNuvioStream(request, stream) {
-  // ponytail: show actual bitrate instead of guessing resolution from it
+  // ponytail: combine resolution guess + actual bitrate + size in quality field
+  var resolution = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
   var bitrate = bitrateLabel(stream.sizeBytes, request.runtimeMinutes);
-  if (bitrate) stream.quality = bitrate;
+  var parts = [];
+  if (resolution) parts.push(resolution);
+  if (bitrate) parts.push(bitrate);
+  if (stream.size) parts.push(stream.size);
+  if (parts.length > 0) stream.quality = parts.join(" • ");
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {

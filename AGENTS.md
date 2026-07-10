@@ -18,7 +18,7 @@ src/
     tmdb.js              # buildMediaRequest, slugCandidates, episodeDateSlug
     packer.js            # Dean Edwards P.A.C.K.E.R. unpack, JuicyCodes decoder, base64
     vkplayer.js          # resolveVkPlayer (provisional quality only — JW labels lie)
-    format.js            # formatBytes, formatDuration, toNuvioStream, bitrateLabel
+    format.js            # formatBytes, formatDuration, toNuvioStream, bitrateLabel, estimateQualityFromSize
   desi-serials-to/       # VkPrime/VkSpeed/Flow from desi-serials.to (TV only)
   desitvserials-se/      # VkPrime/VkSpeed from desitvserials.se (TV only)
   desiruleztv-net/       # VkPrime/VkSpeed from desiruleztv.net (TV only)
@@ -159,22 +159,22 @@ node build.js --watch    # Watch mode (rebuild on change)
 
 JW Player labels are **unreliable** (says "360p" for both real 360p and real 720p).
 Binary MP4 probing is **impossible in Nuvio** (no axios, no arrayBuffer — fetch is text-only).
-Strategy: **show actual bitrate** from file size + TMDB runtime. More honest than
-guessing "720p" from bitrate — the user sees the real number.
+Strategy: **show resolution guess + actual bitrate + size** combined in the quality field.
 
-`bitrateLabel(sizeBytes, runtimeMinutes)` in `src/lib/format.js`:
-- Computes Mbps = `(sizeBytes * 8) / (runtimeMinutes * 60) / 1,000,000`
-- Returns e.g. `"1.9 Mbps"`, `"0.84 Mbps"`, `"12 Mbps"`
+`toNuvioStream` in `src/lib/format.js` combines three pieces:
+- `estimateQualityFromSize(sizeBytes, runtimeMinutes)` — resolution guess from MB/min (< 4→360p, 4-20→720p, >20→1080p)
+- `bitrateLabel(sizeBytes, runtimeMinutes)` — actual Mbps = `(bytes*8)/(min*60)/1e6`
+- `stream.size` — formatted file size (e.g. "822 MB")
+- Joined with " • " → e.g. `"720p • 1.9 Mbps • 822 MB"`
 - Returns `null` if size or runtime unavailable → keeps existing label
-- Called in `toNuvioStream` (one place, `request.runtimeMinutes` already in scope)
 
 | Source | Quality source | Notes |
 |--------|----------------|-------|
-| **VkSpeed/VkPrime MP4** | `bitrateLabel` with Content-Length + TMDB runtime | No binary fetch needed |
-| **MixDrop MP4** | `bitrateLabel` + filename regex fallback | Filename label kept if bitrate returns null |
+| **VkSpeed/VkPrime MP4** | resolution + bitrate + size | No binary fetch needed |
+| **MixDrop MP4** | resolution + bitrate + size | Filename label kept if estimation returns null |
 | **Flow HLS** | Master playlist `RESOLUTION=WxH` | e.g. `720x480` → `480p` (no binary) |
 | **StreamTape** | Page-link text near "Streamtape" | Single quality per upload |
-| **Fallback** | Keep provisional label if bitrate returns null | `unknown` for Vk, filename label for MixDrop |
+| **Fallback** | Keep provisional label if estimation returns null | `unknown` for Vk, filename label for MixDrop |
 
 ## Scraping Robustness Patterns
 
@@ -213,7 +213,7 @@ var FLOW_HOSTS = ["flow.tvlogy.to", "tvlogy.to"];
 - StreamTape: robotlink JS parsing + substring decode + 302 redirect
 
 ### Layer 5: Stream formatting + quality estimation
-- `fetchContentLength` → `bitrateLabel(sizeBytes, runtimeMinutes)` in `toNuvioStream` — actual Mbps
+- `fetchContentLength` → `toNuvioStream` combines resolution + bitrate + size
 - `toNuvioStream` — map resolved streams to Nuvio objects (name/title/url/quality/size/headers)
 
 ### Layer 6: getStreams entry point
@@ -261,7 +261,7 @@ ffprobe -user_agent "Mozilla/5.0 ..." -headers "Referer: ...\r\n" -v error -show
 
 ## Key Findings & Gotchas
 
-1. **VkSpeed/VkPrime quality labels are wrong** — JW may say "360p" for real 720p **or** real 360p. Never trust JW. Show actual bitrate via `bitrateLabel(sizeBytes, runtimeMinutes)` — Mbps from Content-Length + TMDB runtime. Binary MP4 probing is impossible in Nuvio (no axios, no arrayBuffer).
+1. **VkSpeed/VkPrime quality labels are wrong** — JW may say "360p" for real 720p **or** real 360p. Never trust JW. Show resolution guess + actual bitrate + size via `toNuvioStream` (Content-Length + TMDB runtime). Binary MP4 probing is impossible in Nuvio (no axios, no arrayBuffer).
 
 2. **Flow HLS streams are IP-bound** — the token contains the requester's IP + User-Agent. They work from the user's device but 404 when probed from a server. Don't expect ffmpeg verification to work for these.
 
