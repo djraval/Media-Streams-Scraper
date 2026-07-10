@@ -8,6 +8,7 @@ import { resolveFetch, fetchText, fetchContentLength } from "../lib/http.js";
 import { dedupe, dedupeStreams, isPlaceholderUrl, embedHostRegex, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
+import { labelStreamFromProbe } from "../lib/mp4-probe.js";
 import { toNuvioStream, formatBytes } from "../lib/format.js";
 
 // ---------------------------------------------------------------------------
@@ -175,17 +176,22 @@ function resolveFromEpisodeUrls(fetchImpl, episodeUrls) {
               return null;
             }
             var best = real[0];
-            return fetchContentLength(fetchImpl, best.url, best.headers).then(function (contentLength) {
-              return {
-                backend: backend,
-                kind: "mp4",
-                quality: best.quality,
-                url: best.url,
-                size: formatBytes(contentLength),
-                duration: 0,
-                sourceTag: "",
-                headers: best.headers,
-              };
+            var stream = {
+              backend: backend,
+              kind: "mp4",
+              quality: best.quality,
+              url: best.url,
+              size: "",
+              duration: 0,
+              sourceTag: "",
+              headers: best.headers,
+            };
+            return Promise.all([
+              fetchContentLength(fetchImpl, best.url, best.headers),
+              labelStreamFromProbe(stream),
+            ]).then(function (results) {
+              stream.size = formatBytes(results[0]);
+              return stream;
             });
           })
           .catch(function (e) {

@@ -8,6 +8,7 @@ import { resolveFetch, browserHeaders, fetchText, fetchTextTimeout, fetchContent
 import { dedupe, dedupeStreams, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, slugCandidates } from "../lib/tmdb.js";
 import { unpack } from "../lib/packer.js";
+import { labelStreamFromProbe } from "../lib/mp4-probe.js";
 import { formatBytes, toNuvioStream } from "../lib/format.js";
 
 // MixDrop domains — the site frequently changes its primary domain.
@@ -161,24 +162,27 @@ function resolveMixDrop(embedUrl, refererUrl, options) {
       var posterMatch = unpacked.match(/MDCore\.poster\s*=\s*["']([^"']+)["']/);
       var poster = posterMatch ? posterMatch[1] : "";
 
-      // Detect quality from filename or poster
+      // Filename quality is a provisional label; probe overwrites if it works.
       var quality = detectQuality(filename + " " + poster + " " + mp4Url);
 
       var headers = { Referer: url, "User-Agent": UA };
-
-      // Fetch content length
-      return fetchContentLength(fetchImpl, mp4Url, headers).then(function (contentLength) {
-        return {
-          backend: "mixdrop",
-          kind: "mp4",
-          quality: quality,
-          url: mp4Url,
-          size: formatBytes(contentLength),
-          duration: 0,
-          sourceTag: "",
-          headers: headers,
-          filename: filename,
-        };
+      var stream = {
+        backend: "mixdrop",
+        kind: "mp4",
+        quality: quality,
+        url: mp4Url,
+        size: "",
+        duration: 0,
+        sourceTag: "",
+        headers: headers,
+        filename: filename,
+      };
+      return Promise.all([
+        fetchContentLength(fetchImpl, mp4Url, headers),
+        labelStreamFromProbe(stream),
+      ]).then(function (results) {
+        stream.size = formatBytes(results[0]);
+        return stream;
       });
     })
     .catch(function (err) {

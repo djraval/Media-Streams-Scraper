@@ -60,3 +60,47 @@ export function fetchContentLength(fetchImpl, url, headers) {
     })
     .catch(function () { return 0; });
 }
+
+// Binary range for MP4 box parsing. Prefer axios (works in Nuvio sandbox); fetch arrayBuffer for Node.
+// Nuvio's fetch polyfill only exposes text/json body — arrayBuffer is NOT available there.
+export function fetchBinaryRange(url, headers, start, end) {
+  var rangeHeaders = Object.assign({}, headers || {}, { Range: "bytes=" + start + "-" + end });
+
+  function viaAxios() {
+    try {
+      var axios = require("axios");
+      return axios
+        .get(url, { responseType: "arraybuffer", headers: rangeHeaders, timeout: 8000 })
+        .then(function (response) {
+          if (response && response.data && response.data.byteLength >= 16) {
+            return new Uint8Array(response.data);
+          }
+          return null;
+        })
+        .catch(function () { return null; });
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+  }
+
+  function viaFetch() {
+    if (typeof fetch === "undefined") return Promise.resolve(null);
+    return fetch(url, { headers: rangeHeaders })
+      .then(function (response) {
+        if (!response || (response.ok === false && response.status !== 206 && response.status !== 200)) {
+          return null;
+        }
+        if (typeof response.arrayBuffer !== "function") return null;
+        return response.arrayBuffer().then(function (buf) {
+          if (buf && buf.byteLength >= 16) return new Uint8Array(buf);
+          return null;
+        });
+      })
+      .catch(function () { return null; });
+  }
+
+  return viaAxios().then(function (u8) {
+    if (u8) return u8;
+    return viaFetch();
+  });
+}

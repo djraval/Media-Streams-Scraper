@@ -13,11 +13,12 @@ build.js               # esbuild bundler — bundles src/<name>/ → providers/<
 src/
   lib/
     constants.js         # Shared constants (TMDB, UA, headers, channel slugs, host arrays)
-    http.js              # fetchText, fetchTextTimeout, fetchJson, fetchContentLength
+    http.js              # fetchText, fetchTextTimeout, fetchJson, fetchContentLength, fetchBinaryRange
     html.js              # dedupe, decodeText, attrValues, links, iframes, embedHostRegex
     tmdb.js              # buildMediaRequest, slugCandidates, episodeDateSlug
     packer.js            # Dean Edwards P.A.C.K.E.R. unpack, JuicyCodes decoder, base64
-    vkplayer.js          # resolveVkPlayer (hardcodes 720p — JW labels lie)
+    vkplayer.js          # resolveVkPlayer (provisional quality only — JW labels lie)
+    mp4-probe.js         # Slim 64KB faststart MP4 resolution probe + labelStreamFromProbe
     format.js            # formatBytes, formatDuration, toNuvioStream, episode/movie labels
   desi-serials-to/       # VkPrime/VkSpeed/Flow from desi-serials.to (TV only)
   desitvserials-se/      # VkPrime/VkSpeed from desitvserials.se (TV only)
@@ -153,21 +154,20 @@ node build.js --watch    # Watch mode (rebuild on change)
 - m3u8 URL fetched at runtime via XHR — not in static HTML
 - Would require DOM + event loop (not available in Nuvio sandbox)
 
-## Quality Detection (cheap, no binary probing)
+## Quality Detection
 
-Binary MP4/HLS probing was removed in v2.6.0 — it was slow (~1–3s extra),
-fragile in QuickJS (`arrayBuffer`/`bytes` flakes), and other Nuvio providers
-just regex labels. Mapping:
+JW Player labels are **unreliable** (says "360p" for both real 360p and real 720p).
+Filename regex alone is also wrong sometimes. Strategy:
 
 | Source | Quality source | Notes |
 |--------|----------------|-------|
-| **VkSpeed/VkPrime** | Hardcoded `720p` | JW Player labels "360p" but CDN files are always 1280x720 |
-| **Flow HLS** | Master playlist `RESOLUTION=WxH` | e.g. `720x480` → `480p` |
-| **MixDrop** | Filename / page-link text (`720p`, `HD`) | Page embeds often carry quality in anchor text |
+| **VkSpeed/VkPrime / MixDrop MP4** | Slim probe: `Range: bytes=0-65535`, parse `moov→trak→stsd/avc1` | One request, faststart only. Axios binary first (Nuvio fetch has no arrayBuffer). |
+| **Flow HLS** | Master playlist `RESOLUTION=WxH` | e.g. `720x480` → `480p` (no binary) |
 | **StreamTape** | Page-link text near "Streamtape" | Single quality per upload |
+| **Fallback** | Keep provisional label if probe fails | `unknown` for Vk, filename label for MixDrop |
 
-No `enhanceStreamQuality` pass at the end. `fetchContentLength` (Range 0-0)
-still used for MP4 size labels only.
+`labelStreamFromProbe(stream)` lives in `src/lib/mp4-probe.js`. No end-of-file
+moov probe (too slow). No HLS segment sampling.
 
 ## Scraping Robustness Patterns
 
@@ -253,7 +253,7 @@ ffprobe -user_agent "Mozilla/5.0 ..." -headers "Referer: ...\r\n" -v error -show
 
 ## Key Findings & Gotchas
 
-1. **VkSpeed/VkPrime quality labels are wrong** — JW Player says "360p" but actual files are 1280x720. We hardcode `720p` in `resolveVkPlayer`. Do not reintroduce binary probing.
+1. **VkSpeed/VkPrime quality labels are wrong** — JW may say "360p" for real 720p **or** real 360p. Never trust JW. Use `labelStreamFromProbe` on the final CDN MP4 (one 64KB range).
 
 2. **Flow HLS streams are IP-bound** — the token contains the requester's IP + User-Agent. They work from the user's device but 404 when probed from a server. Don't expect ffmpeg verification to work for these.
 

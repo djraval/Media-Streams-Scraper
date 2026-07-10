@@ -17,6 +17,7 @@ import {
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { decodeJuicyCodes } from "../lib/packer.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
+import { labelStreamFromProbe } from "../lib/mp4-probe.js";
 import { formatBytes, toNuvioStream } from "../lib/format.js";
 
 // --- Layer 0: Site configuration constants ---
@@ -161,17 +162,22 @@ function resolveVkPlayerAdapter(embedUrl, refererUrl, options) {
       var best = real[0];
       var headers = { Referer: embedUrl, "User-Agent": UA };
       var backend = embedUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime";
-      return fetchContentLength(fetchImpl, best.url, headers).then(function (contentLength) {
-        return {
-          backend: backend,
-          kind: "mp4",
-          quality: best.quality,
-          url: best.url,
-          size: formatBytes(contentLength),
-          duration: 0,
-          sourceTag: "",
-          headers: headers,
-        };
+      var stream = {
+        backend: backend,
+        kind: "mp4",
+        quality: best.quality,
+        url: best.url,
+        size: "",
+        duration: 0,
+        sourceTag: "",
+        headers: headers,
+      };
+      return Promise.all([
+        fetchContentLength(fetchImpl, best.url, headers),
+        labelStreamFromProbe(stream),
+      ]).then(function (results) {
+        stream.size = formatBytes(results[0]);
+        return stream;
       });
     });
 }
