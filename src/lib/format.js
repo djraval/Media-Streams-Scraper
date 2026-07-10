@@ -91,18 +91,16 @@ export function toNuvioStream(request, stream) {
   if (stream.bandwidth && request.runtimeMinutes && !stream.size) {
     stream.size = formatBytes(stream.bandwidth * request.runtimeMinutes * 60 / 8);
   }
-  // Normalize resolution: drop falsy/empty/"0"/"unknown" → we'll fallback later
+  // Normalize resolution: drop falsy/empty/"0"/"unknown" — don't print it
   var hasRes = resolution && String(resolution) !== "0" && String(resolution).toLowerCase() !== "unknown";
   var parts = [];
   if (hasRes) parts.push(resolution);
   if (bitrate) parts.push(bitrate);
-  if (parts.length > 0) {
-    stream.quality = parts.join(" • ");
-  } else {
-    stream.quality = "unknown";
-  }
+  stream.quality = parts.join(" • ");
   var name = stream.name || displayBackend(stream.sourceTag);
-  var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
+  var title = mediaLabel(request);
+  if (stream.quality) title += " - " + stream.quality;
+  title += " " + String(stream.kind || "stream").toUpperCase();
   return {
     name: name,
     title: title,

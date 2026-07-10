@@ -174,7 +174,7 @@ Bitrate and size are shown separately so users can judge actual visual quality.
 - Size: from CDN Content-Length (MP4), or bandwidth × TMDB runtime (Flow HLS)
 - Quality example: `"720p • 1.9 Mbps"`; separate size example: `"822 MB"`
 - Vk streams show just bitrate (e.g. `"1.9 Mbps"`) since JW labels are unreliable
-- **Unknown-resolution fallback**: falsy/empty/`"0"`/`"unknown"` resolution values are dropped from the `quality` parts array. If bitrate is still available, quality shows just the bitrate. If neither is available, quality falls back to `"unknown"` — never `undefined`, `""`, or `"0"`. Title always renders cleanly.
+- **Unknown-resolution fallback**: falsy/empty/`"0"`/`"unknown"` resolution values are dropped — not printed. If bitrate is available, quality shows just the bitrate. If neither is available, quality is empty (not "unknown"). Title renders cleanly without " - unknown".
 
 | Source | Quality source | Notes |
 |--------|----------------|-------|

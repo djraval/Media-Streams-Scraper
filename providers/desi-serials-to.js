@@ -539,13 +539,12 @@ function toNuvioStream(request, stream) {
     parts.push(resolution);
   if (bitrate)
     parts.push(bitrate);
-  if (parts.length > 0) {
-    stream.quality = parts.join(" \u2022 ");
-  } else {
-    stream.quality = "unknown";
-  }
+  stream.quality = parts.join(" \u2022 ");
   var name = stream.name || displayBackend(stream.sourceTag);
-  var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
+  var title = mediaLabel(request);
+  if (stream.quality)
+    title += " - " + stream.quality;
+  title += " " + String(stream.kind || "stream").toUpperCase();
   return {
     name,
     title,
