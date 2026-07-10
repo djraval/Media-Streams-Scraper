@@ -13,13 +13,12 @@ build.js               # esbuild bundler — bundles src/<name>/ → providers/<
 src/
   lib/
     constants.js         # Shared constants (TMDB, UA, headers, channel slugs, host arrays)
-    http.js              # fetchText, fetchTextTimeout, fetchJson, fetchContentLength, fetchBinaryRange
+    http.js              # fetchText, fetchTextTimeout, fetchJson, fetchContentLength
     html.js              # dedupe, decodeText, attrValues, links, iframes, embedHostRegex
     tmdb.js              # buildMediaRequest, slugCandidates, episodeDateSlug
     packer.js            # Dean Edwards P.A.C.K.E.R. unpack, JuicyCodes decoder, base64
     vkplayer.js          # resolveVkPlayer (provisional quality only — JW labels lie)
-    mp4-probe.js         # Slim 64KB faststart MP4 resolution probe + labelStreamFromProbe
-    format.js            # formatBytes, formatDuration, toNuvioStream, episode/movie labels
+    format.js            # formatBytes, formatDuration, toNuvioStream, estimateQualityFromSize
   desi-serials-to/       # VkPrime/VkSpeed/Flow from desi-serials.to (TV only)
   desitvserials-se/      # VkPrime/VkSpeed from desitvserials.se (TV only)
   desiruleztv-net/       # VkPrime/VkSpeed from desiruleztv.net (TV only)
@@ -52,7 +51,7 @@ node build.js --watch    # Watch mode (rebuild on change)
 
 - **Source**: `src/<name>/index.js` — ES module syntax, imports from `../lib/`
 - **Output**: `providers/<name>.js` — CJS format, es2020 target, all imports inlined
-- **External**: `cheerio-without-node-native`, `crypto-js`, `axios` (provided by sandbox)
+- **External**: `cheerio-without-node-native`, `crypto-js` (provided by sandbox)
 - **Do NOT edit** files in `providers/` directly — edit `src/` and rebuild
 
 ## Nuvio Sandbox Constraints
@@ -61,7 +60,9 @@ node build.js --watch    # Watch mode (rebuild on change)
 - **NO async/await** — must use Promise chains (.then/.catch)
 - **NO Node.js modules** — no fs, path, crypto, child_process, Buffer
 - **Available globally**: `fetch()`, `console`, `Promise`, `Set`, `Map`, `URL`, `ArrayBuffer`, `Uint8Array`
-- **Available via require()**: `cheerio-without-node-native`, `crypto-js`, `axios`
+- **Available via require()**: `cheerio-without-node-native`, `crypto-js` — **NOT axios**
+- **fetch() polyfill is text-only**: `.text()` and `.json()` only — **NO `.arrayBuffer()` or `.bytes()`**
+- **Binary MP4 probing is impossible in-app** — no axios, no arrayBuffer. Use `estimateQualityFromSize()` instead.
 - **ES2020 features work**: matchAll, flatMap, padStart, Set, Map, URL
 - **TextDecoder NOT available** in vanilla QuickJS — use `String.fromCharCode()` instead
 - **Dual export pattern required**:
@@ -157,17 +158,23 @@ node build.js --watch    # Watch mode (rebuild on change)
 ## Quality Detection
 
 JW Player labels are **unreliable** (says "360p" for both real 360p and real 720p).
-Filename regex alone is also wrong sometimes. Strategy:
+Binary MP4 probing is **impossible in Nuvio** (no axios, no arrayBuffer — fetch is text-only).
+Strategy: **bitrate estimation from file size + TMDB runtime**.
+
+`estimateQualityFromSize(sizeBytes, runtimeMinutes)` in `src/lib/format.js`:
+- Computes MB per minute = `sizeBytes / (1024*1024) / runtimeMinutes`
+- `< 4 MB/min` → `360p` (low-bitrate, e.g. Kapil Vkprime 210MB/62min = 3.39)
+- `4–20 MB/min` → `720p` (typical, e.g. Anupamaa 138MB/23min = 6.0, Kapil Vkspeed 822MB/62min = 13.7)
+- `> 20 MB/min` → `1080p` (high-quality movie uploads)
+- Returns `null` if size or runtime unavailable → keeps existing label
 
 | Source | Quality source | Notes |
 |--------|----------------|-------|
-| **VkSpeed/VkPrime / MixDrop MP4** | Slim probe: `Range: bytes=0-65535`, parse `moov→trak→stsd/avc1` | One request, faststart only. Axios binary first (Nuvio fetch has no arrayBuffer). |
+| **VkSpeed/VkPrime MP4** | `estimateQualityFromSize` with Content-Length + TMDB runtime | No binary fetch needed. Runs after `fetchContentLength`. |
+| **MixDrop MP4** | `estimateQualityFromSize` + filename regex fallback | Filename label kept if estimation returns null |
 | **Flow HLS** | Master playlist `RESOLUTION=WxH` | e.g. `720x480` → `480p` (no binary) |
 | **StreamTape** | Page-link text near "Streamtape" | Single quality per upload |
-| **Fallback** | Keep provisional label if probe fails | `unknown` for Vk, filename label for MixDrop |
-
-`labelStreamFromProbe(stream)` lives in `src/lib/mp4-probe.js`. No end-of-file
-moov probe (too slow). No HLS segment sampling.
+| **Fallback** | Keep provisional label if estimation returns null | `unknown` for Vk, filename label for MixDrop |
 
 ## Scraping Robustness Patterns
 
@@ -205,7 +212,8 @@ var FLOW_HOSTS = ["flow.tvlogy.to", "tvlogy.to"];
 - MixDrop: Dean Edwards packer → `MDCore.wurl` + filename quality
 - StreamTape: robotlink JS parsing + substring decode + 302 redirect
 
-### Layer 5: Stream formatting
+### Layer 5: Stream formatting + quality estimation
+- `fetchContentLength` → `estimateQualityFromSize(sizeBytes, runtimeMinutes)` — bitrate heuristic
 - `toNuvioStream` — map resolved streams to Nuvio objects (name/title/url/quality/size/headers)
 
 ### Layer 6: getStreams entry point
@@ -253,7 +261,7 @@ ffprobe -user_agent "Mozilla/5.0 ..." -headers "Referer: ...\r\n" -v error -show
 
 ## Key Findings & Gotchas
 
-1. **VkSpeed/VkPrime quality labels are wrong** — JW may say "360p" for real 720p **or** real 360p. Never trust JW. Use `labelStreamFromProbe` on the final CDN MP4 (one 64KB range).
+1. **VkSpeed/VkPrime quality labels are wrong** — JW may say "360p" for real 720p **or** real 360p. Never trust JW. Use `estimateQualityFromSize(sizeBytes, runtimeMinutes)` — bitrate heuristic from Content-Length + TMDB runtime. Binary MP4 probing is impossible in Nuvio (no axios, no arrayBuffer).
 
 2. **Flow HLS streams are IP-bound** — the token contains the requester's IP + User-Agent. They work from the user's device but 404 when probed from a server. Don't expect ffmpeg verification to work for these.
 
