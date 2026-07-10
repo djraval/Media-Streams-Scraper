@@ -467,19 +467,19 @@ function formatBytes(bytes) {
   var digits = size >= 100 || index === 0 ? 0 : size >= 10 ? 1 : 2;
   return size.toFixed(digits) + " " + units[index];
 }
-function estimateQualityFromSize(sizeBytes, runtimeMinutes) {
+function bitrateLabel(sizeBytes, runtimeMinutes) {
   var bytes = Number(sizeBytes);
   var minutes = Number(runtimeMinutes);
   if (!Number.isFinite(bytes) || bytes <= 0)
     return null;
   if (!Number.isFinite(minutes) || minutes <= 0)
     return null;
-  var mbPerMin = bytes / (1024 * 1024) / minutes;
-  if (mbPerMin < 4)
-    return "360p";
-  if (mbPerMin > 20)
-    return "1080p";
-  return "720p";
+  var mbps = bytes * 8 / (minutes * 60) / 1e6;
+  if (mbps >= 10)
+    return mbps.toFixed(0) + " Mbps";
+  if (mbps >= 1)
+    return mbps.toFixed(1) + " Mbps";
+  return mbps.toFixed(2) + " Mbps";
 }
 function displayBackend(backend) {
   return String(backend || "source");
@@ -513,9 +513,9 @@ function mediaLabel(request) {
   return episodeLabel(request);
 }
 function toNuvioStream(request, stream) {
-  var estimated = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
-  if (estimated)
-    stream.quality = estimated;
+  var bitrate = bitrateLabel(stream.sizeBytes, request.runtimeMinutes);
+  if (bitrate)
+    stream.quality = bitrate;
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {

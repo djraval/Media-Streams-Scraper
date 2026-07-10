@@ -47,7 +47,7 @@ export function mp4QualityLabel(height) {
 }
 
 // Provisional quality only — JW labels lie (360p for real 720p AND for real 360p).
-// Callers must run estimateQualityFromSize on the final stream (using Content-Length + runtime).
+// toNuvioStream overwrites with bitrateLabel (Content-Length + runtime).
 export function resolveVkPlayer(embedUrl, refererUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);

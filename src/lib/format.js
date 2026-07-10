@@ -31,26 +31,17 @@ export function formatDuration(seconds) {
   return s + "s";
 }
 
-// Estimate quality from file size + runtime (bitrate heuristic).
-// Nuvio's fetch polyfill has no binary access (no arrayBuffer, no axios),
-// so we can't probe MP4 box headers. Instead we use MB-per-minute:
-//   < 4 MB/min → 360p   (low-bitrate uploads, e.g. Kapil Vkprime)
-//   4-20 MB/min → 720p  (typical Vk/MixDrop streams)
-//   > 20 MB/min → 1080p (high-quality movie uploads)
-// Calibrated against known samples:
-//   Kapil S4E9 Vkprime: 210 MB / 62 min = 3.39 MB/min → 360p (real 640x360)
-//   Kapil S4E9 Vkspeed: 822 MB / 62 min = 13.7 MB/min → 720p (real 1280x720)
-//   Anupamaa E2060 Vk:  138 MB / 23 min = 6.0 MB/min  → 720p (real 1280x720)
-//   Drishyam3 MixDrop:  673 MB / 157 min = 4.3 MB/min → 720p
-export function estimateQualityFromSize(sizeBytes, runtimeMinutes) {
+// Bitrate label from file size + runtime. More honest than guessing "720p"
+// from bitrate — the user sees the actual Mbps.
+export function bitrateLabel(sizeBytes, runtimeMinutes) {
   var bytes = Number(sizeBytes);
   var minutes = Number(runtimeMinutes);
   if (!Number.isFinite(bytes) || bytes <= 0) return null;
   if (!Number.isFinite(minutes) || minutes <= 0) return null;
-  var mbPerMin = bytes / (1024 * 1024) / minutes;
-  if (mbPerMin < 4) return "360p";
-  if (mbPerMin > 20) return "1080p";
-  return "720p";
+  var mbps = (bytes * 8) / (minutes * 60) / 1000000;
+  if (mbps >= 10) return mbps.toFixed(0) + " Mbps";
+  if (mbps >= 1) return mbps.toFixed(1) + " Mbps";
+  return mbps.toFixed(2) + " Mbps";
 }
 
 export function displayBackend(backend) {
@@ -88,9 +79,9 @@ export function mediaLabel(request) {
 }
 
 export function toNuvioStream(request, stream) {
-  // ponytail: quality estimation in one place — no runtimeMinutes threading through 6 functions
-  var estimated = estimateQualityFromSize(stream.sizeBytes, request.runtimeMinutes);
-  if (estimated) stream.quality = estimated;
+  // ponytail: show actual bitrate instead of guessing resolution from it
+  var bitrate = bitrateLabel(stream.sizeBytes, request.runtimeMinutes);
+  if (bitrate) stream.quality = bitrate;
   var name = stream.name || displayBackend(stream.sourceTag);
   var title = mediaLabel(request) + " - " + stream.quality + " " + String(stream.kind || "stream").toUpperCase();
   return {
