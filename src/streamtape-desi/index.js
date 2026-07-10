@@ -7,7 +7,6 @@ import { UA, BROWSER_HEADERS, TMDB_API_KEY } from "../lib/constants.js";
 import { resolveFetch, fetchText, browserHeaders } from "../lib/http.js";
 import { dedupe, dedupeStreams, decodeText, links } from "../lib/html.js";
 import { buildMediaRequest, slugCandidates } from "../lib/tmdb.js";
-import { enhanceStreamQuality } from "../lib/mp4-probe.js";
 import { toNuvioStream } from "../lib/format.js";
 
 // ---------------------------------------------------------------------------
@@ -822,7 +821,7 @@ function resolveStreamTapeDesi(request, options) {
 }
 
 // ---------------------------------------------------------------------------
-// Layer 5 + Layer 6: Stream formatting, quality probing, entry point
+// Layer 5 + Layer 6: Stream formatting + entry point
 // ---------------------------------------------------------------------------
 
 function getStreamsForRequest(request, options) {
@@ -835,9 +834,6 @@ function getStreamsForRequest(request, options) {
         stream.name = "StreamTape Desi";
         return toNuvioStream(request, stream);
       });
-    })
-    .then(function (streams) {
-      return enhanceStreamQuality(streams);
     })
     .catch(function (error) {
       console.log("[StreamTape Desi] resolver failed: " + error.message);

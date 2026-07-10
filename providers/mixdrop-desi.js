@@ -36,6 +36,14 @@ function fetchText(fetchImpl, url, options) {
     return null;
   });
 }
+function fetchTextTimeout(fetchImpl, url, options, ms) {
+  options = options || {};
+  ms = ms || 4e3;
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    options = Object.assign({}, options, { signal: AbortSignal.timeout(ms) });
+  }
+  return fetchText(fetchImpl, url, options);
+}
 function fetchJson(fetchImpl, url) {
   return fetchImpl(url).then(function(response) {
     if (!response || response.ok === false) {
@@ -62,133 +70,6 @@ function fetchContentLength(fetchImpl, url, headers) {
   }).catch(function() {
     return 0;
   });
-}
-function fetchBinaryViaBytes(url, headers, start, end) {
-  if (typeof fetch === "undefined")
-    return null;
-  try {
-    if (typeof Response !== "undefined" && typeof Response.prototype.bytes !== "function") {
-      return null;
-    }
-  } catch (e) {
-  }
-  var rangeHeaders = Object.assign({}, headers || {}, { Range: "bytes=" + start + "-" + end });
-  return fetch(url, { headers: rangeHeaders }).then(function(response) {
-    if (!response || response.ok === false && response.status !== 206 && response.status !== 200) {
-      return null;
-    }
-    if (typeof response.bytes === "function") {
-      return response.bytes().then(function(u8) {
-        if (u8 && u8.length >= 16) {
-          return u8 instanceof Uint8Array ? u8 : new Uint8Array(u8);
-        }
-        return null;
-      }).catch(function() {
-        return null;
-      });
-    }
-    return null;
-  }).catch(function() {
-    return null;
-  });
-}
-function fetchBinaryViaAxios(url, headers, start, end) {
-  try {
-    var axios = require("axios");
-    var config = {
-      responseType: "arraybuffer",
-      headers: Object.assign({}, headers || {}, { Range: "bytes=" + start + "-" + end })
-    };
-    return axios.get(url, config).then(function(response) {
-      if (response && response.data && response.data.byteLength >= 16) {
-        return new Uint8Array(response.data);
-      }
-      return null;
-    }).catch(function() {
-      return null;
-    });
-  } catch (e) {
-    return null;
-  }
-}
-function fetchBinaryViaFetch(url, headers, start, end) {
-  if (typeof fetch === "undefined")
-    return null;
-  var rangeHeaders = Object.assign({}, headers || {}, {
-    Range: "bytes=" + start + "-" + end
-  });
-  return fetch(url, { headers: rangeHeaders }).then(function(response) {
-    if (!response || response.ok === false && response.status !== 206 && response.status !== 200) {
-      return null;
-    }
-    if (typeof response.arrayBuffer === "function") {
-      return response.arrayBuffer();
-    }
-    return null;
-  }).then(function(buffer) {
-    if (buffer && buffer.byteLength >= 16) {
-      return new Uint8Array(buffer);
-    }
-    return null;
-  }).catch(function() {
-    return null;
-  });
-}
-function fetchBinaryRange(url, headers, start, end) {
-  var p = fetchBinaryViaBytes(url, headers, start, end);
-  if (!p)
-    p = Promise.resolve(null);
-  return p.then(function(result) {
-    if (result)
-      return result;
-    var ap = fetchBinaryViaAxios(url, headers, start, end);
-    return ap || Promise.resolve(null);
-  }).then(function(result) {
-    if (result)
-      return result;
-    var fp = fetchBinaryViaFetch(url, headers, start, end);
-    return fp || Promise.resolve(null);
-  }).then(function(result) {
-    return result || null;
-  });
-}
-function fetchBinary(url, headers, rangeBytes) {
-  var end = (rangeBytes || 65536) - 1;
-  return fetchBinaryRange(url, headers, 0, end);
-}
-function fetchFileSize(url, headers) {
-  var rangeHeaders = Object.assign({}, headers || {}, { Range: "bytes=0-0" });
-  if (typeof fetch !== "undefined") {
-    return fetch(url, { headers: rangeHeaders }).then(function(response) {
-      if (!response)
-        return 0;
-      var cr = response.headers && response.headers.get("content-range") || "";
-      var match = cr.match(/\/(\d+)$/);
-      if (match)
-        return Number(match[1]);
-      var cl = response.headers && response.headers.get("content-length") || "";
-      return Number(cl) || 0;
-    }).catch(function() {
-      return 0;
-    });
-  }
-  try {
-    var axios = require("axios");
-    return axios.head(url, { headers: rangeHeaders }).then(function(response) {
-      if (!response || !response.headers)
-        return 0;
-      var cr = response.headers["content-range"] || "";
-      var match = cr.match(/\/(\d+)$/);
-      if (match)
-        return Number(match[1]);
-      var cl = response.headers["content-length"] || "";
-      return Number(cl) || 0;
-    }).catch(function() {
-      return 0;
-    });
-  } catch (e) {
-    return Promise.resolve(0);
-  }
 }
 
 // src/lib/html.js
@@ -469,342 +350,6 @@ function toNuvioStream(request, stream) {
     size: stream.size || "",
     headers: stream.headers || {}
   };
-}
-
-// src/lib/mp4-probe.js
-var CODEC_BOXES = { avc1: 1, avc3: 1, hvc1: 1, hev1: 1, hvc2: 1, shv1: 1, mp4v: 1 };
-function readUint32BE(u8, offset) {
-  return u8[offset] * 16777216 + (u8[offset + 1] << 16) + (u8[offset + 2] << 8) + u8[offset + 3] >>> 0;
-}
-function readUint16BE(u8, offset) {
-  return (u8[offset] << 8) + u8[offset + 1] >>> 0;
-}
-function readUint8(u8, offset) {
-  return u8[offset];
-}
-function readFourCC(u8, offset) {
-  return String.fromCharCode(u8[offset], u8[offset + 1], u8[offset + 2], u8[offset + 3]);
-}
-function qualityFromResolution(width, height) {
-  if (!height || height <= 0)
-    return "unknown";
-  if (height >= 2160)
-    return "4K";
-  if (height >= 1440)
-    return "1440p";
-  if (height >= 1080)
-    return "1080p";
-  if (height >= 720)
-    return "720p";
-  if (height >= 480)
-    return "480p";
-  if (height >= 360)
-    return "360p";
-  if (height >= 240)
-    return "240p";
-  if (height >= 144)
-    return "144p";
-  return "unknown";
-}
-function probeMp4Resolution(url, headers, rangeBytes) {
-  var chunkSize = rangeBytes || 65536;
-  return fetchBinaryRange(url, headers, 0, 255).then(function(header) {
-    if (!header || header.length < 16) {
-      return fetchBinary(url, headers, chunkSize).then(function(u8) {
-        if (!u8 || u8.length < 16)
-          return null;
-        return parseMp4Root(u8, u8.length);
-      });
-    }
-    var faststart = detectFaststart(header);
-    if (faststart) {
-      return fetchBinary(url, headers, chunkSize).then(function(u8) {
-        if (!u8 || u8.length < 16)
-          return null;
-        return parseMp4Root(u8, u8.length);
-      });
-    }
-    return probeMp4FromEnd(url, headers, chunkSize);
-  }).catch(function() {
-    return null;
-  });
-}
-function detectFaststart(header) {
-  var offset = 0;
-  var end = header.length;
-  var sawFtyp = false;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(header, offset);
-    var type = readFourCC(header, offset + 4);
-    if (size < 8)
-      break;
-    if (type === "ftyp") {
-      sawFtyp = true;
-    } else if (type === "moov") {
-      return true;
-    } else if (type === "mdat" || type === "free" || type === "skip" || type === "wide") {
-      return false;
-    }
-    if (offset + size > end)
-      break;
-    offset += size;
-  }
-  return true;
-}
-function probeMp4FromEnd(url, headers, chunkSize) {
-  return fetchFileSize(url, headers).then(function(totalSize) {
-    if (totalSize <= 0)
-      return null;
-    var start = Math.max(0, totalSize - chunkSize);
-    return fetchBinaryRange(url, headers, start, totalSize - 1).then(function(u8) {
-      if (!u8 || u8.length < 16)
-        return null;
-      var moovOffset = findMoovBackwards(u8);
-      if (moovOffset < 0)
-        return null;
-      var moovSize = readUint32BE(u8, moovOffset);
-      var moovFileOffset = start + moovOffset;
-      if (moovOffset + moovSize > u8.length) {
-        var fetchSize = Math.min(moovSize, 262144);
-        var fetchEnd = Math.min(moovFileOffset + fetchSize - 1, totalSize - 1);
-        return fetchBinaryRange(url, headers, moovFileOffset, fetchEnd).then(function(moovData) {
-          if (!moovData || moovData.length < 16)
-            return null;
-          return parseMoov(moovData, 8, moovData.length);
-        });
-      }
-      return parseMoov(u8, moovOffset + 8, moovOffset + moovSize);
-    });
-  }).catch(function() {
-    return null;
-  });
-}
-function findMoovBackwards(u8) {
-  for (var i = u8.length - 4; i >= 4; i--) {
-    if (u8[i] === 109 && u8[i + 1] === 111 && u8[i + 2] === 111 && u8[i + 3] === 118) {
-      var boxStart = i - 4;
-      var size = readUint32BE(u8, boxStart);
-      if (size >= 8 && size <= 104857600) {
-        return boxStart;
-      }
-    }
-  }
-  return -1;
-}
-function parseMp4Root(u8, end) {
-  var offset = 0;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(u8, offset);
-    var type = readFourCC(u8, offset + 4);
-    if (size < 8)
-      break;
-    var boxEnd = offset + size;
-    if (boxEnd > end)
-      boxEnd = end;
-    if (type === "moov") {
-      var result = parseMoov(u8, offset + 8, boxEnd);
-      if (result)
-        return result;
-    }
-    offset += size;
-  }
-  return null;
-}
-function parseMoov(u8, start, end) {
-  var offset = start;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(u8, offset);
-    var type = readFourCC(u8, offset + 4);
-    if (size < 8)
-      break;
-    var boxEnd = offset + size;
-    if (boxEnd > end)
-      boxEnd = end;
-    if (type === "trak") {
-      var result = parseTrak(u8, offset + 8, boxEnd);
-      if (result && result.width > 0 && result.height > 0)
-        return result;
-    }
-    offset += size;
-  }
-  return null;
-}
-function parseTrak(u8, start, end) {
-  var tkhdResult = null;
-  var stsdResult = null;
-  var offset = start;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(u8, offset);
-    var type = readFourCC(u8, offset + 4);
-    if (size < 8)
-      break;
-    var boxEnd = offset + size;
-    if (boxEnd > end)
-      boxEnd = end;
-    if (type === "tkhd") {
-      tkhdResult = parseTkhd(u8, offset + 8, boxEnd);
-    } else if (type === "mdia") {
-      stsdResult = parseMdia(u8, offset + 8, boxEnd);
-    }
-    offset += size;
-  }
-  if (stsdResult && stsdResult.width > 0 && stsdResult.height > 0)
-    return stsdResult;
-  return tkhdResult;
-}
-function parseTkhd(u8, start, end) {
-  if (start + 4 > end)
-    return null;
-  var version = readUint8(u8, start);
-  var width, height;
-  if (version === 1) {
-    if (start + 104 > end)
-      return null;
-    width = readUint32BE(u8, start + 96);
-    height = readUint32BE(u8, start + 100);
-  } else {
-    if (start + 84 > end)
-      return null;
-    width = readUint32BE(u8, start + 76);
-    height = readUint32BE(u8, start + 80);
-  }
-  return { width: Math.round(width / 65536), height: Math.round(height / 65536), codec: "" };
-}
-function parseMdia(u8, start, end) {
-  var offset = start;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(u8, offset);
-    var type = readFourCC(u8, offset + 4);
-    if (size < 8)
-      break;
-    var boxEnd = offset + size;
-    if (boxEnd > end)
-      boxEnd = end;
-    if (type === "minf") {
-      var r = parseMinf(u8, offset + 8, boxEnd);
-      if (r)
-        return r;
-    }
-    offset += size;
-  }
-  return null;
-}
-function parseMinf(u8, start, end) {
-  var offset = start;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(u8, offset);
-    var type = readFourCC(u8, offset + 4);
-    if (size < 8)
-      break;
-    var boxEnd = offset + size;
-    if (boxEnd > end)
-      boxEnd = end;
-    if (type === "stbl") {
-      var r = parseStbl(u8, offset + 8, boxEnd);
-      if (r)
-        return r;
-    }
-    offset += size;
-  }
-  return null;
-}
-function parseStbl(u8, start, end) {
-  var offset = start;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(u8, offset);
-    var type = readFourCC(u8, offset + 4);
-    if (size < 8)
-      break;
-    var boxEnd = offset + size;
-    if (boxEnd > end)
-      boxEnd = end;
-    if (type === "stsd") {
-      var r = parseStsd(u8, offset + 8, boxEnd);
-      if (r)
-        return r;
-    }
-    offset += size;
-  }
-  return null;
-}
-function parseStsd(u8, start, end) {
-  if (start + 8 > end)
-    return null;
-  var offset = start + 8;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(u8, offset);
-    var type = readFourCC(u8, offset + 4);
-    if (size < 8)
-      break;
-    var boxEnd = offset + size;
-    if (boxEnd > end)
-      boxEnd = end;
-    if (CODEC_BOXES[type]) {
-      return parseVisualSampleEntry(u8, offset + 8, boxEnd, type);
-    }
-    var inner = findCodecBox(u8, offset + 8, boxEnd);
-    if (inner)
-      return inner;
-    offset += size;
-  }
-  return null;
-}
-function findCodecBox(u8, start, end) {
-  var offset = start;
-  while (offset + 8 <= end) {
-    var size = readUint32BE(u8, offset);
-    var type = readFourCC(u8, offset + 4);
-    if (size < 8)
-      break;
-    var boxEnd = offset + size;
-    if (boxEnd > end)
-      boxEnd = end;
-    if (CODEC_BOXES[type]) {
-      return parseVisualSampleEntry(u8, offset + 8, boxEnd, type);
-    }
-    offset += size;
-  }
-  return null;
-}
-function parseVisualSampleEntry(u8, start, end, codec) {
-  if (start + 28 > end)
-    return null;
-  var width = readUint16BE(u8, start + 24);
-  var height = readUint16BE(u8, start + 26);
-  return { width, height, codec };
-}
-function enhanceStreamQuality(streams, options) {
-  if (!streams || streams.length === 0)
-    return Promise.resolve(streams || []);
-  var hlsProbeFn = options && options.hlsProbe || null;
-  var promises = streams.map(function(stream) {
-    if (!stream || !stream.url)
-      return Promise.resolve(stream);
-    var headers = stream.headers || {};
-    var probePromise;
-    if (stream.url.indexOf(".m3u8") >= 0) {
-      if (hlsProbeFn) {
-        probePromise = hlsProbeFn(stream.url, headers).catch(function() {
-          return null;
-        });
-      } else {
-        return Promise.resolve(stream);
-      }
-    } else if (stream.url.indexOf(".mp4") >= 0) {
-      probePromise = probeMp4Resolution(stream.url, headers).catch(function() {
-        return null;
-      });
-    } else {
-      return Promise.resolve(stream);
-    }
-    return probePromise.then(function(result) {
-      if (result && result.width > 0 && result.height > 0) {
-        stream.quality = qualityFromResolution(result.width, result.height);
-      }
-      return stream;
-    });
-  });
-  return Promise.all(promises);
 }
 
 // src/mixdrop-desi/index.js
@@ -1097,20 +642,19 @@ function buildMoviePageUrls(request) {
     }
   }
   var currentYear = (/* @__PURE__ */ new Date()).getFullYear();
-  if (years.indexOf(String(currentYear)) === -1) {
+  if (years.indexOf(String(currentYear)) === -1)
     years.push(String(currentYear));
-  }
   years = dedupe(years);
-  for (var i = 0; i < slugs.length; i++) {
-    var slug = slugs[i];
-    for (var yi = 0; yi < years.length; yi++) {
-      var year = years[yi];
+  for (var yi = 0; yi < years.length; yi++) {
+    for (var i = 0; i < slugs.length; i++) {
       for (var si = 0; si < MOVIE_SUFFIXES.length; si++) {
-        urls.push(WATCH_MOVIES_BASE + slug + "-" + year + MOVIE_SUFFIXES[si]);
+        urls.push(WATCH_MOVIES_BASE + slugs[i] + "-" + years[yi] + MOVIE_SUFFIXES[si]);
       }
     }
+  }
+  for (var i2 = 0; i2 < slugs.length; i2++) {
     for (var si2 = 0; si2 < MOVIE_SUFFIXES.length; si2++) {
-      urls.push(WATCH_MOVIES_BASE + slug + MOVIE_SUFFIXES[si2]);
+      urls.push(WATCH_MOVIES_BASE + slugs[i2] + MOVIE_SUFFIXES[si2]);
     }
   }
   return dedupe(urls);
@@ -1119,32 +663,18 @@ function resolveFromEpisodePages(fetchImpl, episodeUrls) {
   if (episodeUrls.length === 0) {
     return Promise.resolve([]);
   }
-  return Promise.all(
-    episodeUrls.map(function(url) {
-      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS }).catch(function() {
-        return null;
-      });
-    })
-  ).then(function(pages) {
-    var allEmbeds = [];
-    for (var i = 0; i < pages.length; i++) {
-      if (pages[i]) {
-        var embeds = findMixDropEmbeds(pages[i]);
-        for (var j = 0; j < embeds.length; j++) {
-          allEmbeds.push(embeds[j]);
-        }
-      }
-    }
-    if (allEmbeds.length === 0) {
-      return [];
-    }
+  var PAGE_TIMEOUT_MS = 4e3;
+  var BATCH = 6;
+  var allEmbeds = [];
+  var index = 0;
+  function resolveEmbeds() {
+    if (allEmbeds.length === 0)
+      return Promise.resolve([]);
     return Promise.all(
       allEmbeds.map(function(embed) {
         return resolveMixDrop(embed.url, WATCH_MOVIES_BASE, { fetchImpl }).then(function(stream) {
-          if (stream && embed.quality) {
-            if (stream.quality === "unknown") {
-              stream.quality = embed.quality;
-            }
+          if (stream && embed.quality && stream.quality === "unknown") {
+            stream.quality = embed.quality;
           }
           return stream;
         }).catch(function() {
@@ -1154,7 +684,30 @@ function resolveFromEpisodePages(fetchImpl, episodeUrls) {
     ).then(function(resolved) {
       return dedupeStreams(resolved);
     });
-  });
+  }
+  function nextBatch() {
+    if (allEmbeds.length > 0 || index >= episodeUrls.length) {
+      return resolveEmbeds();
+    }
+    var batch = episodeUrls.slice(index, index + BATCH);
+    index += BATCH;
+    return Promise.all(
+      batch.map(function(url) {
+        return fetchTextTimeout(fetchImpl, url, { headers: BROWSER_HEADERS }, PAGE_TIMEOUT_MS);
+      })
+    ).then(function(pages) {
+      for (var i = 0; i < pages.length; i++) {
+        if (!pages[i])
+          continue;
+        var embeds = findMixDropEmbeds(pages[i]);
+        for (var j = 0; j < embeds.length; j++) {
+          allEmbeds.push(embeds[j]);
+        }
+      }
+      return nextBatch();
+    });
+  }
+  return nextBatch();
 }
 function resolveMixDropDesi(request, options) {
   options = options || {};
@@ -1177,8 +730,6 @@ function getStreamsForRequest(request, options) {
       }
       return toNuvioStream(request, stream);
     });
-  }).then(function(streams) {
-    return enhanceStreamQuality(streams);
   }).catch(function(error) {
     console.log("[MixDrop Desi] resolver failed: " + error.message);
     return [];

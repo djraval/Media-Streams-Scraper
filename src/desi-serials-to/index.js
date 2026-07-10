@@ -17,8 +17,6 @@ import {
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { decodeJuicyCodes } from "../lib/packer.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
-import { enhanceStreamQuality } from "../lib/mp4-probe.js";
-import { probeHlsResolution } from "../lib/hls-probe.js";
 import { formatBytes, toNuvioStream } from "../lib/format.js";
 
 // --- Layer 0: Site configuration constants ---
@@ -221,58 +219,6 @@ function parseHlsMasterPlaylist(raw, baseUrl) {
   return variants;
 }
 
-function parseHlsMediaPlaylist(raw, baseUrl) {
-  var segments = [];
-  var totalDuration = 0;
-  var lines = String(raw || "").split("\n");
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i].trim();
-    if (line.startsWith("#EXTINF:")) {
-      var durMatch = line.match(/#EXTINF:([\d.]+)/i);
-      var duration = durMatch ? Number(durMatch[1]) : 0;
-      totalDuration += duration;
-      var urlLine = nextUriLine(lines, i + 1);
-      if (urlLine) {
-        segments.push({ url: resolveRelativeUrl(baseUrl, urlLine), duration: duration });
-      }
-    }
-  }
-  return { segments: segments, totalDuration: totalDuration };
-}
-
-function estimateHlsSize(fetchImpl, segments, headers, bandwidth, totalDuration) {
-  var count = segments.length;
-  // Bitrate-based fallback: bytes ~= bandwidth (bits/s) * duration (s) / 8
-  var bitrateEstimate =
-    bandwidth > 0 && totalDuration > 0 ? Math.round((bandwidth * totalDuration) / 8) : 0;
-
-  if (count === 0) {
-    return Promise.resolve(bitrateEstimate);
-  }
-  var sampleSize = Math.min(5, count);
-  var sampleUrls = [];
-  for (var i = 0; i < sampleSize; i++) {
-    var idx = Math.floor((i * count) / sampleSize);
-    sampleUrls.push(segments[idx].url);
-  }
-  return Promise.all(
-    sampleUrls.map(function (url) {
-      return fetchContentLength(fetchImpl, url, headers);
-    }),
-  ).then(function (sizes) {
-    var valid = sizes.filter(function (s) {
-      return s > 0;
-    });
-    if (valid.length === 0) {
-      return bitrateEstimate;
-    }
-    var avg = valid.reduce(function (a, b) {
-      return a + b;
-    }, 0) / valid.length;
-    return Math.round(avg * count);
-  });
-}
-
 function flowVariantLabel(url) {
   var match = String(url || "").match(/flow\.tvlogy\.to\/([a-z0-9]+)\//i);
   if (!match) {
@@ -304,6 +250,9 @@ function buildFlowStream(quality, size, duration, playerUrl, streamHeaders, url)
   };
 }
 
+// ponytail: quality from master RESOLUTION only. Skip media-playlist + segment
+// size sampling (~15 range requests) — size/duration never reach Nuvio anyway
+// (toNuvioStream drops duration; empty size is fine).
 function resolveFlowPlayer(playerUrl, refererUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
@@ -324,57 +273,11 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
       }
       return fetchText(fetchImpl, masterUrl, browserHeaders(playerUrl)).then(function (manifest) {
         var variants = parseHlsMasterPlaylist(manifest, masterUrl);
-        var variantManifestPromise;
-        if (variants.length > 0) {
-          var best = variants[0];
-          var quality = best.height > 0 ? best.height + "p" : hlsQualityFromManifest(manifest);
-          variantManifestPromise = fetchText(fetchImpl, best.url, browserHeaders(playerUrl))
-            .then(function (vm) {
-              return {
-                parsed: parseHlsMediaPlaylist(vm, best.url),
-                quality: quality,
-                bandwidth: best.bandwidth,
-                url: masterUrl,
-              };
-            })
-            .catch(function () {
-              return {
-                parsed: { segments: [], totalDuration: 0 },
-                quality: quality,
-                bandwidth: best.bandwidth,
-                url: masterUrl,
-                sizeSkipped: true,
-              };
-            });
-        } else {
-          variantManifestPromise = Promise.resolve({
-            parsed: parseHlsMediaPlaylist(manifest, masterUrl),
-            quality: hlsQualityFromManifest(manifest),
-            bandwidth: 0,
-            url: masterUrl,
-          });
-        }
-        return variantManifestPromise.then(function (info) {
-          if (info.sizeSkipped) {
-            return buildFlowStream(info.quality, "", 0, playerUrl, streamHeaders, masterUrl);
-          }
-          return estimateHlsSize(
-            fetchImpl,
-            info.parsed.segments,
-            streamHeaders,
-            info.bandwidth,
-            info.parsed.totalDuration,
-          ).then(function (estimatedSize) {
-            return buildFlowStream(
-              info.quality,
-              formatBytes(estimatedSize),
-              info.parsed.totalDuration,
-              playerUrl,
-              streamHeaders,
-              masterUrl,
-            );
-          });
-        });
+        var quality =
+          variants.length > 0 && variants[0].height > 0
+            ? variants[0].height + "p"
+            : hlsQualityFromManifest(manifest);
+        return buildFlowStream(quality, "", 0, playerUrl, streamHeaders, masterUrl);
       });
     });
 }
@@ -499,7 +402,7 @@ function processArchive(fetchImpl, archiveUrls, request, index) {
     });
 }
 
-// --- Layer 5: Stream formatting + quality probing ---
+// --- Layer 5: Stream formatting ---
 
 function getStreamsForRequest(request, options) {
   options = options || {};
@@ -510,9 +413,6 @@ function getStreamsForRequest(request, options) {
         stream.name = providerDisplayName(stream);
         return toNuvioStream(request, stream);
       });
-    })
-    .then(function (streams) {
-      return enhanceStreamQuality(streams, { hlsProbe: probeHlsResolution });
     })
     .catch(function (error) {
       console.log("[Desi-Serials.to] resolver failed: " + error.message);

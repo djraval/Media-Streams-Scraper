@@ -13,13 +13,11 @@ build.js               # esbuild bundler — bundles src/<name>/ → providers/<
 src/
   lib/
     constants.js         # Shared constants (TMDB, UA, headers, channel slugs, host arrays)
-    http.js              # fetchText, fetchJson, fetchBinary, fetchContentLength
+    http.js              # fetchText, fetchTextTimeout, fetchJson, fetchContentLength
     html.js              # dedupe, decodeText, attrValues, links, iframes, embedHostRegex
     tmdb.js              # buildMediaRequest, slugCandidates, episodeDateSlug
     packer.js            # Dean Edwards P.A.C.K.E.R. unpack, JuicyCodes decoder, base64
-    vkplayer.js          # resolveVkPlayer, JW Player source parsing, MP4 ranking
-    mp4-probe.js         # Pure JS MP4 resolution detector (fetch 64KB, parse boxes)
-    hls-probe.js         # HLS master playlist resolution parser
+    vkplayer.js          # resolveVkPlayer (hardcodes 720p — JW labels lie)
     format.js            # formatBytes, formatDuration, toNuvioStream, episode/movie labels
   desi-serials-to/       # VkPrime/VkSpeed/Flow from desi-serials.to (TV only)
   desitvserials-se/      # VkPrime/VkSpeed from desitvserials.se (TV only)
@@ -64,8 +62,6 @@ node build.js --watch    # Watch mode (rebuild on change)
 - **Available globally**: `fetch()`, `console`, `Promise`, `Set`, `Map`, `URL`, `ArrayBuffer`, `Uint8Array`
 - **Available via require()**: `cheerio-without-node-native`, `crypto-js`, `axios`
 - **ES2020 features work**: matchAll, flatMap, padStart, Set, Map, URL
-- **`response.arrayBuffer()` may NOT work** in Nuvio's fetch binding — use axios fallback with `responseType: "arraybuffer"`
-- **DataView works** but Uint8Array is more universally compatible — use manual byte reading
 - **TextDecoder NOT available** in vanilla QuickJS — use `String.fromCharCode()` instead
 - **Dual export pattern required**:
   ```javascript
@@ -157,28 +153,21 @@ node build.js --watch    # Watch mode (rebuild on change)
 - m3u8 URL fetched at runtime via XHR — not in static HTML
 - Would require DOM + event loop (not available in Nuvio sandbox)
 
-## Quality Detection (mp4-probe.js + hls-probe.js)
+## Quality Detection (cheap, no binary probing)
 
-### MP4 Probe (two-phase)
-- **Phase 1 — faststart check**: Fetch first 64KB with `Range: bytes=0-65535`. Parse MP4 box hierarchy: `moov → trak → tkhd` (width/height at 16.16 fixed-point). Also check `moov → trak → mdia → minf → stbl → stsd → avc1` (width/height as uint16). If `moov` is found at the front, resolution is returned immediately.
-- **Phase 2 — moov-at-end fallback**: If phase 1 finds no `moov` box (non-faststart MP4), fetch the last 256KB of the file using `Range: bytes={size-262144}-{size-1}`. The `moov` box for non-faststart files is at the end. Parse the same box hierarchy from this tail chunk.
-- Uses Uint8Array with manual big-endian reading (no DataView dependency)
-- `fetchBinary` tries `response.bytes()` → axios (`responseType: "arraybuffer"`) → `response.arrayBuffer()` in order, since QuickJS sandbox may not implement all three
-- `fetchFileSize` uses `Content-Length` header or HEAD request to determine file size for phase 2
-- `qualityFromResolution(width, height)`: 2160+→4K, 1080+→1080p, 720+→720p, 480+→480p, <480→"unknown"
+Binary MP4/HLS probing was removed in v2.6.0 — it was slow (~1–3s extra),
+fragile in QuickJS (`arrayBuffer`/`bytes` flakes), and other Nuvio providers
+just regex labels. Mapping:
 
-### HLS Probe
-- Master playlist: parse `#EXT-X-STREAM-INF:RESOLUTION=WxH` lines
-- Media playlist: fetch first segment, detect container (TS vs fMP4)
-- TS: parse PAT/PMT → find video PID → collect PES → find H.264 SPS NAL → parse SPS for width/height
-- fMP4: parse `moov/trak/mdia/minf/stbl/stsd` boxes
-- Full H.264 SPS parser with exp-Golomb decoder (handles frame cropping, chroma format, etc.)
+| Source | Quality source | Notes |
+|--------|----------------|-------|
+| **VkSpeed/VkPrime** | Hardcoded `720p` | JW Player labels "360p" but CDN files are always 1280x720 |
+| **Flow HLS** | Master playlist `RESOLUTION=WxH` | e.g. `720x480` → `480p` |
+| **MixDrop** | Filename / page-link text (`720p`, `HD`) | Page embeds often carry quality in anchor text |
+| **StreamTape** | Page-link text near "Streamtape" | Single quality per upload |
 
-### Integration
-- Probe code lives in `src/lib/mp4-probe.js` and `src/lib/hls-probe.js`, bundled into each provider by esbuild
-- `enhanceStreamQuality(streams, options)` called before returning streams — pass `{ hlsProbe: probeHlsResolution }` for HLS providers
-- Best-effort: keeps original quality label if probe fails
-- Probes streams in parallel via `Promise.all`
+No `enhanceStreamQuality` pass at the end. `fetchContentLength` (Range 0-0)
+still used for MP4 size labels only.
 
 ## Scraping Robustness Patterns
 
@@ -195,13 +184,15 @@ var FLOW_HOSTS = ["flow.tvlogy.to", "tvlogy.to"];
 
 ### Layer 1: HTTP fetch helpers
 - `fetchText(url, headers)` — fetch with text response
-- `fetchBinary(url, headers, rangeBytes)` — fetch with arrayBuffer + axios fallback
+- `fetchTextTimeout(url, headers, ms)` — same with `AbortSignal.timeout` for speculative URL probes
+- `fetchContentLength(url, headers)` — Range 0-0 for MP4 size labels
 
 ### Layer 2: Site search + episode page discovery
 - Search via WordPress `?s=` query or direct URL construction
 - Multiple slug variants (abbreviations, hyphen removal)
 - Multiple year candidates (air date year, season start year)
 - Multiple URL suffix patterns (extensible arrays)
+- MixDrop/watch-movies: batch speculative page URLs (timeout + stop-on-first-hit) — do NOT fire all variants and wait for hangs
 
 ### Layer 3: Embed URL extraction
 - Regex built from host arrays: `embedHostRegex(hosts, pathPattern)`
@@ -209,17 +200,16 @@ var FLOW_HOSTS = ["flow.tvlogy.to", "tvlogy.to"];
 - Handles both iframe and anchor tag formats
 
 ### Layer 4: Player resolution
-- VkSpeed/VkPrime: JW Player sources parsing + Dean Edwards packer unpacking
-- Flow: HLS master playlist parsing
-- MixDrop: Dean Edwards packer → `MDCore.wurl`
+- VkSpeed/VkPrime: JW Player sources parsing + Dean Edwards packer unpacking → quality `720p`
+- Flow: HLS master playlist RESOLUTION only (no media-playlist / segment size sampling)
+- MixDrop: Dean Edwards packer → `MDCore.wurl` + filename quality
 - StreamTape: robotlink JS parsing + substring decode + 302 redirect
 
-### Layer 5: Stream formatting + quality probing
-- `enhanceStreamQuality(streams)` — probes each stream in parallel
-- Maps detected resolution to quality label
+### Layer 5: Stream formatting
+- `toNuvioStream` — map resolved streams to Nuvio objects (name/title/url/quality/size/headers)
 
 ### Layer 6: getStreams entry point
-- TMDB lookup → site search → embed extraction → player resolution → quality probing → return
+- TMDB lookup → site search → embed extraction → player resolution → return
 
 ## Source Sites
 
@@ -263,29 +253,27 @@ ffprobe -user_agent "Mozilla/5.0 ..." -headers "Referer: ...\r\n" -v error -show
 
 ## Key Findings & Gotchas
 
-1. **VkSpeed/VkPrime quality labels are wrong** — JW Player says "360p" but actual files are 1280x720 (720p). Always use the MP4 probe for accurate labels.
+1. **VkSpeed/VkPrime quality labels are wrong** — JW Player says "360p" but actual files are 1280x720. We hardcode `720p` in `resolveVkPlayer`. Do not reintroduce binary probing.
 
 2. **Flow HLS streams are IP-bound** — the token contains the requester's IP + User-Agent. They work from the user's device but 404 when probed from a server. Don't expect ffmpeg verification to work for these.
 
-3. **MixDrop tokens are time-limited but NOT IP-bound** — they expire after ~24h but work from any IP. Probe immediately after extraction.
+3. **MixDrop tokens are time-limited but NOT IP-bound** — they expire after ~24h but work from any IP.
 
-4. **StreamTape tokens are both time-limited AND IP-bound** — must probe immediately from the same IP that generated them.
+4. **StreamTape tokens are both time-limited AND IP-bound** — only work from the same IP that generated them.
 
-5. **watch-movies.com.pk search is Cloudflare-blocked** — but direct URL construction works. Build episode/movie page URLs from TMDB metadata instead of searching.
+5. **watch-movies.com.pk search is Cloudflare-blocked** — but direct URL construction works. Build episode/movie page URLs from TMDB metadata instead of searching. Speculative URL variants hang ~120s — use `fetchTextTimeout` + batch/stop-on-first-hit.
 
 6. **Dean Edwards packer token case matters** — tokens 10-35 must use lowercase a-z, 36+ must use uppercase A-Z (matching JavaScript's `toString(base)`). VkSpeed's packer uses lowercase.
 
-7. **`response.arrayBuffer()` is the biggest risk** in the Nuvio sandbox — it may not be implemented in the QuickJS fetch binding. The axios fallback is critical.
+7. **desitvserials.se has movies but uses hgcloud.to player** — not VkPrime/VkSpeed. Would need a separate player resolver to add movie support.
 
-8. **desitvserials.se has movies but uses hgcloud.to player** — not VkPrime/VkSpeed. Would need a separate player resolver to add movie support.
+8. **FileMoon uses AES-256-GCM** which crypto-js doesn't support — `crypto.subtle` may work as a workaround (phisher98 uses it for AES-CBC), but AES-GCM support in QuickJS is untested.
 
-9. **FileMoon uses AES-256-GCM** which crypto-js doesn't support — `crypto.subtle` (Web Crypto API) may work as a workaround (phisher98 uses it for AES-CBC), but AES-GCM support in QuickJS is untested.
+9. **StreamWish returns empty HTML shell** — all logic in obfuscated main.js with RC4 string array. Requires DOM + event loop for XHR. Not feasible in Nuvio sandbox.
 
-10. **StreamWish returns empty HTML shell** — all logic in obfuscated main.js with RC4 string array. Requires DOM + event loop for XHR. Not feasible in Nuvio sandbox.
+10. **Nuvio docs say "Hermes" but the actual engine is QuickJS** (via quickjs-kt). Don't trust the docs — check the source code.
 
-11. **Nuvio docs say "Hermes" but the actual engine is QuickJS** (via quickjs-kt). The React Native app was replaced by a Kotlin Multiplatform version. Don't trust the docs — check the source code.
-
-12. **Local Node.js tests can pass while in-app fails** — always test in the Nuvio Plugin Tester (debug builds only) before shipping.
+11. **Local Node.js tests can pass while in-app fails** — always test in the Nuvio Plugin Tester (debug builds only) before shipping.
 
 ## Reference Repositories
 

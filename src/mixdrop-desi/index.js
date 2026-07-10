@@ -4,12 +4,11 @@
 // function extracts MDCore.wurl to obtain a direct MP4 URL on *.mxcontent.net.
 
 import { BROWSER_HEADERS, UA } from "../lib/constants.js";
-import { resolveFetch, browserHeaders, fetchText, fetchContentLength } from "../lib/http.js";
+import { resolveFetch, browserHeaders, fetchText, fetchTextTimeout, fetchContentLength } from "../lib/http.js";
 import { dedupe, dedupeStreams, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, slugCandidates } from "../lib/tmdb.js";
 import { unpack } from "../lib/packer.js";
 import { formatBytes, toNuvioStream } from "../lib/format.js";
-import { enhanceStreamQuality } from "../lib/mp4-probe.js";
 
 // MixDrop domains — the site frequently changes its primary domain.
 var MIXDROP_DOMAINS = [
@@ -397,11 +396,10 @@ function buildEpisodePageUrls(request) {
 // Movie URL pattern: {WATCH_MOVIES_BASE}{slug}-{year}{suffix}
 // where {suffix} is one of MOVIE_SUFFIXES (e.g. "-hindi-full-movie-watch-online-hd-print-free-download/").
 // No season/episode — movies are single videos.
+// Ordered best-first: primary slug + release year, then adjacent years, then abbrs.
 function buildMoviePageUrls(request) {
   var urls = [];
   var slugs = slugCandidates(request.title);
-
-  // Collect year candidates: release year from TMDB, current year, and adjacent years
   var years = [];
   if (request.airDate) {
     var releaseYear = request.airDate.substring(0, 4);
@@ -412,25 +410,22 @@ function buildMoviePageUrls(request) {
     }
   }
   var currentYear = new Date().getFullYear();
-  if (years.indexOf(String(currentYear)) === -1) {
-    years.push(String(currentYear));
-  }
+  if (years.indexOf(String(currentYear)) === -1) years.push(String(currentYear));
   years = dedupe(years);
 
-  for (var i = 0; i < slugs.length; i++) {
-    var slug = slugs[i];
-    for (var yi = 0; yi < years.length; yi++) {
-      var year = years[yi];
+  // Prefer full-title slug first (index 0), then expansions
+  for (var yi = 0; yi < years.length; yi++) {
+    for (var i = 0; i < slugs.length; i++) {
       for (var si = 0; si < MOVIE_SUFFIXES.length; si++) {
-        urls.push(WATCH_MOVIES_BASE + slug + "-" + year + MOVIE_SUFFIXES[si]);
+        urls.push(WATCH_MOVIES_BASE + slugs[i] + "-" + years[yi] + MOVIE_SUFFIXES[si]);
       }
     }
-    // Also try without year
+  }
+  for (var i2 = 0; i2 < slugs.length; i2++) {
     for (var si2 = 0; si2 < MOVIE_SUFFIXES.length; si2++) {
-      urls.push(WATCH_MOVIES_BASE + slug + MOVIE_SUFFIXES[si2]);
+      urls.push(WATCH_MOVIES_BASE + slugs[i2] + MOVIE_SUFFIXES[si2]);
     }
   }
-
   return dedupe(urls);
 }
 
@@ -438,44 +433,26 @@ function buildMoviePageUrls(request) {
 // Stream resolution pipeline
 // ---------------------------------------------------------------------------
 
-// Resolve MixDrop streams from watch-movies.com.pk episode pages.
+// ponytail: race page URLs with short timeout, stop once any page yields embeds.
+// Firing every year/slug variant and waiting for all hangs (~120s on CF dead ends).
 function resolveFromEpisodePages(fetchImpl, episodeUrls) {
   if (episodeUrls.length === 0) {
     return Promise.resolve([]);
   }
 
-  // Fetch all candidate episode pages in parallel
-  return Promise.all(
-    episodeUrls.map(function (url) {
-      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
-        .catch(function () { return null; });
-    })
-  ).then(function (pages) {
-    // Extract MixDrop embeds from all pages
-    var allEmbeds = [];
-    for (var i = 0; i < pages.length; i++) {
-      if (pages[i]) {
-        var embeds = findMixDropEmbeds(pages[i]);
-        for (var j = 0; j < embeds.length; j++) {
-          allEmbeds.push(embeds[j]);
-        }
-      }
-    }
+  var PAGE_TIMEOUT_MS = 4000;
+  var BATCH = 6;
+  var allEmbeds = [];
+  var index = 0;
 
-    if (allEmbeds.length === 0) {
-      return [];
-    }
-
-    // Resolve each MixDrop embed to a direct MP4
+  function resolveEmbeds() {
+    if (allEmbeds.length === 0) return Promise.resolve([]);
     return Promise.all(
       allEmbeds.map(function (embed) {
         return resolveMixDrop(embed.url, WATCH_MOVIES_BASE, { fetchImpl: fetchImpl })
           .then(function (stream) {
-            if (stream && embed.quality) {
-              // Override quality if we detected it from the page
-              if (stream.quality === "unknown") {
-                stream.quality = embed.quality;
-              }
+            if (stream && embed.quality && stream.quality === "unknown") {
+              stream.quality = embed.quality;
             }
             return stream;
           })
@@ -484,7 +461,31 @@ function resolveFromEpisodePages(fetchImpl, episodeUrls) {
     ).then(function (resolved) {
       return dedupeStreams(resolved);
     });
-  });
+  }
+
+  function nextBatch() {
+    if (allEmbeds.length > 0 || index >= episodeUrls.length) {
+      return resolveEmbeds();
+    }
+    var batch = episodeUrls.slice(index, index + BATCH);
+    index += BATCH;
+    return Promise.all(
+      batch.map(function (url) {
+        return fetchTextTimeout(fetchImpl, url, { headers: BROWSER_HEADERS }, PAGE_TIMEOUT_MS);
+      })
+    ).then(function (pages) {
+      for (var i = 0; i < pages.length; i++) {
+        if (!pages[i]) continue;
+        var embeds = findMixDropEmbeds(pages[i]);
+        for (var j = 0; j < embeds.length; j++) {
+          allEmbeds.push(embeds[j]);
+        }
+      }
+      return nextBatch();
+    });
+  }
+
+  return nextBatch();
 }
 
 function resolveMixDropDesi(request, options) {
@@ -519,9 +520,6 @@ function getStreamsForRequest(request, options) {
         }
         return toNuvioStream(request, stream);
       });
-    })
-    .then(function (streams) {
-      return enhanceStreamQuality(streams);
     })
     .catch(function (error) {
       console.log("[MixDrop Desi] resolver failed: " + error.message);

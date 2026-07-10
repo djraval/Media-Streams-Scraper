@@ -8,7 +8,6 @@ import { resolveFetch, fetchText, fetchContentLength } from "../lib/http.js";
 import { dedupe, dedupeStreams, isPlaceholderUrl, embedHostRegex, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
-import { enhanceStreamQuality } from "../lib/mp4-probe.js";
 import { toNuvioStream, formatBytes } from "../lib/format.js";
 
 // ---------------------------------------------------------------------------
@@ -255,7 +254,7 @@ function resolveDesiRulezTV(request, options) {
 }
 
 // ---------------------------------------------------------------------------
-// Layer 5 + Layer 6: Stream formatting, quality probing, entry point
+// Layer 5 + Layer 6: Stream formatting + entry point
 // ---------------------------------------------------------------------------
 
 function getStreamsForRequest(request, options) {
@@ -271,9 +270,6 @@ function getStreamsForRequest(request, options) {
         }
         return toNuvioStream(request, stream);
       });
-    })
-    .then(function (streams) {
-      return enhanceStreamQuality(streams);
     })
     .catch(function (error) {
       console.log("[DesiRulezTV.net] resolver failed: " + error.message);

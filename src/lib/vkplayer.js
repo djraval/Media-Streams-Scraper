@@ -46,6 +46,8 @@ export function mp4QualityLabel(height) {
   return height < 480 ? "unknown" : height + "p";
 }
 
+// ponytail: JW Player labels VkSpeed/VkPrime as "360p" but CDN files are
+// always 1280x720. Hardcode 720p — binary probing is slow and flakes in QuickJS.
 export function resolveVkPlayer(embedUrl, refererUrl, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
@@ -61,7 +63,7 @@ export function resolveVkPlayer(embedUrl, refererUrl, options) {
       return sources.map(function (src) {
         return {
           url: src.url,
-          quality: mp4QualityLabel(src.quality),
+          quality: "720p",
           kind: "mp4",
           headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
         };
