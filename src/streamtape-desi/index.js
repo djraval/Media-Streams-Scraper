@@ -4,7 +4,7 @@
 // substring offsets → get_video URL → 302 redirect → CDN MP4.
 
 import { UA, BROWSER_HEADERS, TMDB_API_KEY } from "../lib/constants.js";
-import { resolveFetch, fetchText, browserHeaders } from "../lib/http.js";
+import { resolveFetch, fetchFirstResult, browserHeaders } from "../lib/http.js";
 import { dedupe, dedupeStreams, decodeText, links } from "../lib/html.js";
 import { buildMediaRequest, slugCandidates } from "../lib/tmdb.js";
 import { toNuvioStream } from "../lib/format.js";
@@ -332,15 +332,14 @@ function buildWatchMoviesEpisodeUrls(request) {
 
   // Determine candidate years: air year, current year, and adjacent years
   var years = [];
-  if (request.airYear) {
-    years.push(request.airYear);
-  }
+  var airYear = request.airYear || String(request.airDate || "").substring(0, 4);
+  if (airYear) years.push(airYear);
   var currentYear = new Date().getFullYear();
   if (years.indexOf(String(currentYear)) === -1) {
     years.push(String(currentYear));
   }
-  if (request.airYear) {
-    var airYearNum = Number(request.airYear);
+  if (airYear) {
+    var airYearNum = Number(airYear);
     if (years.indexOf(String(airYearNum - 1)) === -1) {
       years.push(String(airYearNum - 1));
     }
@@ -353,6 +352,15 @@ function buildWatchMoviesEpisodeUrls(request) {
   var expandedSuffixes = EPISODE_SUFFIXES.map(function (s) {
     return s.replace(/\{season\}/g, String(season));
   });
+
+  for (var ps = 0; ps < slugs.length; ps += 1) {
+    for (var py = 0; py < years.length; py += 1) {
+      urls.push(
+        WATCH_MOVIES_BASE + slugs[ps] + "-" + years[py] + "-ep-" +
+        String(episode).padStart(2, "0") + expandedSuffixes[0]
+      );
+    }
+  }
 
   for (var s = 0; s < slugs.length; s += 1) {
     for (var y = 0; y < years.length; y += 1) {
@@ -382,15 +390,14 @@ function buildWatchMoviesMovieUrls(request) {
 
   // Determine candidate years: release year, current year, and adjacent years
   var years = [];
-  if (request.airYear) {
-    years.push(request.airYear);
-  }
+  var airYear = request.airYear || String(request.airDate || "").substring(0, 4);
+  if (airYear) years.push(airYear);
   var currentYear = new Date().getFullYear();
   if (years.indexOf(String(currentYear)) === -1) {
     years.push(String(currentYear));
   }
-  if (request.airYear) {
-    var airYearNum = Number(request.airYear);
+  if (airYear) {
+    var airYearNum = Number(airYear);
     if (years.indexOf(String(airYearNum - 1)) === -1) {
       years.push(String(airYearNum - 1));
     }
@@ -428,7 +435,7 @@ var ULLUHD_HOST_RE = /^https:\/\/ulluhd\.com\//i;
 
 function buildUlluhdSearchUrls(request) {
   var title = request.title || "";
-  var slugs = slugCandidates(title);
+  var slugs = slugCandidates(title).slice(0, 2);
   var urls = [];
   for (var i = 0; i < slugs.length; i += 1) {
     urls.push(ULLUHD_BASE + "?s=" + encodeURIComponent(slugs[i]).replace(/%20/g, "+"));
@@ -492,106 +499,13 @@ function ulluhdEpisodeCandidates(markup, request) {
 // Layer 2 (continued) + Layer 3 + Layer 4: Main resolution flow
 // ---------------------------------------------------------------------------
 
-function resolveFromEpisodeUrls(fetchImpl, episodeUrls, request) {
-  if (episodeUrls.length === 0) {
-    return Promise.resolve([]);
-  }
-  return Promise.all(
-    episodeUrls.map(function (url) {
-      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
-        .catch(function () { return null; });
-    })
-  ).then(function (episodePages) {
-    // Collect all StreamTape IDs and their associated quality from all episode pages
-    var allEntries = [];
-    for (var i = 0; i < episodePages.length; i += 1) {
-      var page = episodePages[i];
-      if (!page) {
-        continue;
-      }
-      var ids = extractStreamTapeIds(page);
-      var quality = qualityNearStreamTape(page);
-      for (var j = 0; j < ids.length; j += 1) {
-        allEntries.push({ id: ids[j], quality: quality, pageHtml: page });
-      }
-    }
-    // Also check for StreamTape links in <a> href attributes
-    for (var k = 0; k < episodePages.length; k += 1) {
-      var pg = episodePages[k];
-      if (!pg) {
-        continue;
-      }
-      var pageLinks = links(pg);
-      for (var m = 0; m < pageLinks.length; m += 1) {
-        var linkUrl = pageLinks[m];
-        if (isStreamTapeUrl(linkUrl)) {
-          var id = extractStreamTapeId(linkUrl);
-          if (id) {
-            allEntries.push({ id: id, quality: qualityNearStreamTape(pg), pageHtml: pg });
-          }
-        }
-      }
-    }
-
-    // Deduplicate by ID
-    var seenIds = new Set();
-    var uniqueEntries = [];
-    for (var n = 0; n < allEntries.length; n += 1) {
-      if (!seenIds.has(allEntries[n].id)) {
-        seenIds.add(allEntries[n].id);
-        uniqueEntries.push(allEntries[n]);
-      }
-    }
-
-    if (uniqueEntries.length === 0) {
-      return [];
-    }
-
-    // Resolve each StreamTape ID to a CDN URL
-    return Promise.all(
-      uniqueEntries.map(function (entry) {
-        var embedUrl = STREAMTAPE_EMBED_BASE + entry.id;
-        return resolveStreamTape(embedUrl, { fetchImpl: fetchImpl })
-          .then(function (resolved) {
-            if (!resolved || !resolved.cdnUrl) {
-              return null;
-            }
-            return {
-              kind: "mp4",
-              quality: entry.quality,
-              url: resolved.cdnUrl,
-              size: "",
-              duration: 0,
-              sourceTag: "",
-              headers: {
-                Referer: resolved.embedUrl,
-                "User-Agent": UA,
-              },
-            };
-          })
-          .catch(function () { return null; });
-      })
-    ).then(function (resolved) {
-      return dedupeStreams(resolved.filter(function (s) { return s !== null; }));
-    });
-  });
-}
-
 function searchSite(fetchImpl, searchUrls, episodeCandidateFn, request) {
-  if (searchUrls.length === 0) {
-    return Promise.resolve([]);
-  }
-  return Promise.all(
-    searchUrls.map(function (url) {
-      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS });
-    })
-  ).then(function (searchPages) {
-    var episodeUrls = dedupe(
-      searchPages.flatMap(function (page) {
-        return page ? episodeCandidateFn(page, request) : [];
-      })
-    );
-    return episodeUrls;
+  if (searchUrls.length === 0) return Promise.resolve([]);
+  return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function (page) {
+    var episodeUrls = episodeCandidateFn(page, request);
+    return episodeUrls.length > 0 ? episodeUrls : null;
+  }).then(function (episodeUrls) {
+    return episodeUrls || [];
   });
 }
 
@@ -666,158 +580,32 @@ function resolveStreamTapeDesi(request, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
 
-  // Movie path: only use watch-movies.com.pk (ulluhd.com has no movies)
-  if (request.mediaType === "movie") {
-    var movieUrls = buildWatchMoviesMovieUrls(request);
-    var moviePromise = Promise.all(
-      movieUrls.map(function (url) {
-        return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
-          .then(function (html) {
-            if (!html) {
-              return null;
-            }
-            if (watchMoviesHasStreamTape(html)) {
-              return { url: url, html: html };
-            }
-            return null;
-          })
-          .catch(function () { return null; });
-      })
-    ).then(function (results) {
-      return results.filter(function (r) { return r !== null; });
-    });
-
-    return moviePromise.then(function (pages) {
-      if (pages.length === 0) {
-        return [];
-      }
-      return resolveStreamTapeFromPages(fetchImpl, pages);
+  function firstPage(urls) {
+    return fetchFirstResult(fetchImpl, urls.slice(0, 8), { headers: BROWSER_HEADERS }, function (html, url) {
+      return { url: url, html: html };
     });
   }
 
-  // TV path (existing logic)
-  // watch-movies.com.pk: construct episode URLs directly (search is blocked by Cloudflare)
-  var watchMoviesUrls = buildWatchMoviesEpisodeUrls(request);
-  // ulluhd.com: use WordPress search
-  var ulluhdUrls = buildUlluhdSearchUrls(request);
+  if (request.mediaType === "movie") {
+    return firstPage(buildWatchMoviesMovieUrls(request)).then(function (page) {
+      if (!page || !watchMoviesHasStreamTape(page.html)) return [];
+      return resolveStreamTapeFromPages(fetchImpl, [page]);
+    });
+  }
 
-  // Fetch watch-movies.com.pk episode pages directly
-  var watchMoviesPromise = Promise.all(
-    watchMoviesUrls.map(function (url) {
-      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
-        .then(function (html) {
-          if (!html) {
-            return null;
-          }
-          // Check if this is a valid episode page with StreamTape links
-          if (watchMoviesHasStreamTape(html)) {
-            return { url: url, html: html };
-          }
-          return null;
-        })
-        .catch(function () { return null; });
-    })
-  ).then(function (results) {
-    return results.filter(function (r) { return r !== null; });
+  return firstPage(buildWatchMoviesEpisodeUrls(request)).then(function (page) {
+    if (page && watchMoviesHasStreamTape(page.html)) {
+      return resolveStreamTapeFromPages(fetchImpl, [page]);
+    }
+    return searchSite(fetchImpl, buildUlluhdSearchUrls(request), ulluhdEpisodeCandidates, request)
+      .then(function (episodeUrls) {
+        return firstPage(episodeUrls);
+      })
+      .then(function (ulluhdPage) {
+        if (!ulluhdPage || !watchMoviesHasStreamTape(ulluhdPage.html)) return [];
+        return resolveStreamTapeFromPages(fetchImpl, [ulluhdPage]);
+      });
   });
-
-  // Search ulluhd.com
-  var ulluhdPromise = searchSite(fetchImpl, ulluhdUrls, ulluhdEpisodeCandidates, request)
-    .then(function (episodeUrls) {
-      // Fetch episode pages
-      return Promise.all(
-        episodeUrls.map(function (url) {
-          return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS })
-            .then(function (html) {
-              if (!html) {
-                return null;
-              }
-              if (extractStreamTapeIds(html).length > 0 || links(html).some(function (href) { return isStreamTapeUrl(href); })) {
-                return { url: url, html: html };
-              }
-              return null;
-            })
-            .catch(function () { return null; });
-        })
-      ).then(function (results) {
-        return results.filter(function (r) { return r !== null; });
-      });
-    });
-
-  return Promise.all([watchMoviesPromise, ulluhdPromise])
-    .then(function (results) {
-      var watchMoviesPages = results[0];
-      var ulluhdPages = results[1];
-      var allPages = watchMoviesPages.concat(ulluhdPages);
-
-      if (allPages.length === 0) {
-        return [];
-      }
-
-      // Collect all StreamTape IDs and their associated quality from all episode pages
-      var allEntries = [];
-      for (var i = 0; i < allPages.length; i += 1) {
-        var page = allPages[i].html;
-        var ids = extractStreamTapeIds(page);
-        var quality = qualityNearStreamTape(page);
-        for (var j = 0; j < ids.length; j += 1) {
-          allEntries.push({ id: ids[j], quality: quality });
-        }
-        // Also check for StreamTape links in <a> href attributes
-        var pageLinks = links(page);
-        for (var m = 0; m < pageLinks.length; m += 1) {
-          var linkUrl = pageLinks[m];
-          if (isStreamTapeUrl(linkUrl)) {
-            var id = extractStreamTapeId(linkUrl);
-            if (id) {
-              allEntries.push({ id: id, quality: qualityNearStreamTape(page) });
-            }
-          }
-        }
-      }
-
-      // Deduplicate by ID
-      var seenIds = new Set();
-      var uniqueEntries = [];
-      for (var n = 0; n < allEntries.length; n += 1) {
-        if (!seenIds.has(allEntries[n].id)) {
-          seenIds.add(allEntries[n].id);
-          uniqueEntries.push(allEntries[n]);
-        }
-      }
-
-      if (uniqueEntries.length === 0) {
-        return [];
-      }
-
-      // Resolve each StreamTape ID to a CDN URL
-      return Promise.all(
-        uniqueEntries.map(function (entry) {
-          var embedUrl = STREAMTAPE_EMBED_BASE + entry.id;
-          return resolveStreamTape(embedUrl, { fetchImpl: fetchImpl })
-            .then(function (resolved) {
-              if (!resolved || !resolved.cdnUrl) {
-                return null;
-              }
-              return {
-                kind: "mp4",
-                quality: entry.quality,
-                url: resolved.cdnUrl,
-                size: "",
-                duration: 0,
-                sourceTag: "",
-                headers: {
-                  Referer: resolved.embedUrl,
-                  "User-Agent": UA,
-                },
-              };
-            })
-            .catch(function () { return null; });
-        })
-      ).then(function (resolved) {
-        return dedupeStreams(resolved.filter(function (s) { return s !== null; }));
-      });
-    });
 }
 
 // ---------------------------------------------------------------------------

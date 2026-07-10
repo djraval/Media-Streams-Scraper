@@ -2,7 +2,7 @@
 // via VkPrime/VkSpeed (MP4) and Flow (HLS) players.
 
 import { TMDB_API_KEY, UA, BROWSER_HEADERS, VKSPEED_HOSTS, VKPRIME_HOSTS } from "../lib/constants.js";
-import { resolveFetch, browserHeaders, fetchText, fetchContentLength } from "../lib/http.js";
+import { resolveFetch, browserHeaders, fetchText, fetchFirstResult, fetchContentLength } from "../lib/http.js";
 import {
   dedupe,
   dedupeStreams,
@@ -68,7 +68,7 @@ function buildCandidateUrls(request) {
   var urls = [];
   for (var i = 0; i < channels.length; i++) {
     var channel = channels[i];
-    var slugs = request.slugCandidates || [];
+    var slugs = (request.slugCandidates || []).slice(0, 2);
     for (var j = 0; j < slugs.length; j++) {
       var slug = slugs[j];
       urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/");
@@ -87,7 +87,7 @@ function buildSearchUrls(request) {
   // WordPress search requires words separated by + (spaces), not hyphens.
   // The date slug is "10th-april-2026" but the search query needs "10th april 2026".
   var dateQuery = dateSlug.replace(/-/g, " ");
-  var slugs = request.slugCandidates || [];
+  var slugs = (request.slugCandidates || []).slice(0, 2);
   var urls = [];
   for (var i = 0; i < slugs.length; i++) {
     urls.push(
@@ -362,20 +362,13 @@ function resolveDesiSerials(request, options) {
   // and returns direct episode page links regardless of how deep the episode
   // is in the archive pagination.
   if (searchUrls.length > 0) {
-    return Promise.all(
-      searchUrls.map(function (url) {
-        return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS });
-      }),
-    ).then(function (searchPages) {
-      var episodeUrls = dedupe(
-        searchPages.flatMap(function (page) {
-          return page ? episodePageCandidates(page, request) : [];
-        }),
-      );
-      if (episodeUrls.length > 0) {
+    return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function (page) {
+      var episodeUrls = episodePageCandidates(page, request);
+      return episodeUrls.length > 0 ? episodeUrls : null;
+    }).then(function (episodeUrls) {
+      if (episodeUrls) {
         return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request);
       }
-      // Phase 2: Fall back to archive pagination if search found nothing.
       return processArchive(fetchImpl, archiveUrls, request, 0);
     });
   }

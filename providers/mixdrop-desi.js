@@ -36,13 +36,18 @@ function fetchText(fetchImpl, url, options) {
     return null;
   });
 }
-function fetchTextTimeout(fetchImpl, url, options, ms) {
-  options = options || {};
-  ms = ms || 4e3;
-  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
-    options = Object.assign({}, options, { signal: AbortSignal.timeout(ms) });
+function fetchFirstResult(fetchImpl, urls, options, select) {
+  function next(index) {
+    if (index >= urls.length)
+      return Promise.resolve(null);
+    return fetchText(fetchImpl, urls[index], options).then(function(text) {
+      if (!text)
+        return next(index + 1);
+      var result = select(text, urls[index]);
+      return result === null || result === void 0 ? next(index + 1) : result;
+    });
   }
-  return fetchText(fetchImpl, url, options);
+  return next(0);
 }
 function fetchJson(fetchImpl, url) {
   return fetchImpl(url).then(function(response) {
@@ -183,7 +188,7 @@ function slugCandidates(title) {
 function requestSlugCandidates(title, season) {
   var candidates = slugCandidates(title);
   if (season > 1 && candidates.length > 0) {
-    candidates.push(candidates[0] + "-" + season);
+    candidates.unshift(candidates[0] + "-" + season);
   }
   return dedupe(candidates);
 }
@@ -633,6 +638,13 @@ function buildEpisodePageUrls(request) {
   var expandedSuffixes = EPISODE_SUFFIXES.map(function(s) {
     return s.replace(/\{season\}/g, String(season));
   });
+  for (var pi = 0; pi < slugs.length; pi++) {
+    for (var pyi = 0; pyi < years.length; pyi++) {
+      urls.push(
+        WATCH_MOVIES_BASE + slugs[pi] + "-" + years[pyi] + "-ep-" + String(episode).padStart(2, "0") + expandedSuffixes[0]
+      );
+    }
+  }
   for (var i = 0; i < slugs.length; i++) {
     var slug = slugs[i];
     for (var yi = 0; yi < years.length; yi++) {
@@ -703,22 +715,19 @@ function buildMoviePageUrls(request) {
   return dedupe(urls);
 }
 function resolveFromEpisodePages(fetchImpl, episodeUrls) {
-  if (episodeUrls.length === 0) {
+  if (episodeUrls.length === 0)
     return Promise.resolve([]);
-  }
-  var PAGE_TIMEOUT_MS = 4e3;
-  var BATCH = 6;
-  var allEmbeds = [];
-  var index = 0;
-  function resolveEmbeds() {
-    if (allEmbeds.length === 0)
-      return Promise.resolve([]);
+  return fetchFirstResult(fetchImpl, episodeUrls.slice(0, 8), { headers: BROWSER_HEADERS }, function(html) {
+    return html;
+  }).then(function(page) {
+    var embeds = findMixDropEmbeds(page || "");
+    if (embeds.length === 0)
+      return [];
     return Promise.all(
-      allEmbeds.map(function(embed) {
+      embeds.map(function(embed) {
         return resolveMixDrop(embed.url, WATCH_MOVIES_BASE, { fetchImpl }).then(function(stream) {
-          if (stream && embed.quality && stream.quality === "unknown") {
+          if (stream && embed.quality && stream.quality === "unknown")
             stream.quality = embed.quality;
-          }
           return stream;
         }).catch(function() {
           return null;
@@ -727,30 +736,7 @@ function resolveFromEpisodePages(fetchImpl, episodeUrls) {
     ).then(function(resolved) {
       return dedupeStreams(resolved);
     });
-  }
-  function nextBatch() {
-    if (allEmbeds.length > 0 || index >= episodeUrls.length) {
-      return resolveEmbeds();
-    }
-    var batch = episodeUrls.slice(index, index + BATCH);
-    index += BATCH;
-    return Promise.all(
-      batch.map(function(url) {
-        return fetchTextTimeout(fetchImpl, url, { headers: BROWSER_HEADERS }, PAGE_TIMEOUT_MS);
-      })
-    ).then(function(pages) {
-      for (var i = 0; i < pages.length; i++) {
-        if (!pages[i])
-          continue;
-        var embeds = findMixDropEmbeds(pages[i]);
-        for (var j = 0; j < embeds.length; j++) {
-          allEmbeds.push(embeds[j]);
-        }
-      }
-      return nextBatch();
-    });
-  }
-  return nextBatch();
+  });
 }
 function resolveMixDropDesi(request, options) {
   options = options || {};

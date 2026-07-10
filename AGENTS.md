@@ -13,7 +13,7 @@ build.js               # esbuild bundler — bundles src/<name>/ → providers/<
 src/
   lib/
     constants.js         # Shared constants (TMDB, UA, headers, channel slugs, host arrays)
-    http.js              # fetchText, fetchTextTimeout, fetchJson, fetchContentLength
+    http.js              # fetchText, fetchFirstResult, fetchJson, fetchContentLength
     html.js              # dedupe, decodeText, attrValues, links, iframes, embedHostRegex
     tmdb.js              # buildMediaRequest, slugCandidates, episodeDateSlug
     packer.js            # Dean Edwards P.A.C.K.E.R. unpack, JuicyCodes decoder, base64
@@ -62,6 +62,8 @@ node build.js --watch    # Watch mode (rebuild on change)
 - **Available globally**: `fetch()`, `console`, `Promise`, `Set`, `Map`, `URL`, `ArrayBuffer`, `Uint8Array`
 - **Available via require()**: `cheerio-without-node-native`, `crypto-js` — **NOT axios**
 - **fetch() polyfill is text-only**: `.text()` and `.json()` only — **NO `.arrayBuffer()` or `.bytes()`**
+- **`fetch()` blocks inside `__native_fetch`** — `Promise.all(urls.map(fetch))` does not provide real concurrency in-app; it serially performs every request. Use `fetchFirstResult` for speculative candidates and stop after the first useful page.
+- **AbortSignal cannot interrupt native fetch** — candidate ordering/count matters more than JavaScript timeouts.
 - **Binary MP4 probing is impossible in-app** — no axios, no arrayBuffer. Show actual bitrate instead (`bitrateLabel()`).
 - **ES2020 features work**: matchAll, flatMap, padStart, Set, Map, URL
 - **TextDecoder NOT available** in vanilla QuickJS — use `String.fromCharCode()` instead
@@ -183,15 +185,15 @@ All providers follow these patterns (applied during hardening):
 ### Layer 0: Configuration constants
 ```javascript
 var SITE_BASE = "https://desi-serials.to";
-var SEARCH_PATH = "/search.html?q=";
-var VKSPEED_HOSTS = ["vkspeed.com", "vkcdn5.com", "vkcdn6.com"];
+var SEARCH_PATH = "/?s=";
+var VKSPEED_HOSTS = ["vkspeed.com", "vkcdn5.com", "vkcdn6.com", "vkcdn7.com"];
 var VKPRIME_HOSTS = ["vkprime.com"];
 var FLOW_HOSTS = ["flow.tvlogy.to", "tvlogy.to"];
 ```
 
 ### Layer 1: HTTP fetch helpers
 - `fetchText(url, headers)` — fetch with text response
-- `fetchTextTimeout(url, headers, ms)` — same with `AbortSignal.timeout` for speculative URL probes
+- `fetchFirstResult(fetchImpl, urls, options, select)` — sequential candidates, stop at first selected result
 - `fetchContentLength(url, headers)` — Range 0-0 for MP4 size labels
 
 ### Layer 2: Site search + episode page discovery
@@ -269,7 +271,7 @@ ffprobe -user_agent "Mozilla/5.0 ..." -headers "Referer: ...\r\n" -v error -show
 
 4. **StreamTape tokens are both time-limited AND IP-bound** — only work from the same IP that generated them.
 
-5. **watch-movies.com.pk search is Cloudflare-blocked** — but direct URL construction works. Build episode/movie page URLs from TMDB metadata instead of searching. Speculative URL variants hang ~120s — use `fetchTextTimeout` + batch/stop-on-first-hit.
+5. **watch-movies.com.pk search is Cloudflare-blocked** — but direct URL construction works. Build episode/movie page URLs from TMDB metadata, try likely patterns first, cap probes at 8, and stop at the first HTTP 200 page.
 
 6. **Dean Edwards packer token case matters** — tokens 10-35 must use lowercase a-z, 36+ must use uppercase A-Z (matching JavaScript's `toString(base)`). VkSpeed's packer uses lowercase.
 

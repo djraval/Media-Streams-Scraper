@@ -52,6 +52,19 @@ function fetchText(fetchImpl, url, options) {
     return null;
   });
 }
+function fetchFirstResult(fetchImpl, urls, options, select) {
+  function next(index) {
+    if (index >= urls.length)
+      return Promise.resolve(null);
+    return fetchText(fetchImpl, urls[index], options).then(function(text) {
+      if (!text)
+        return next(index + 1);
+      var result = select(text, urls[index]);
+      return result === null || result === void 0 ? next(index + 1) : result;
+    });
+  }
+  return next(0);
+}
 function fetchJson(fetchImpl, url) {
   return fetchImpl(url).then(function(response) {
     if (!response || response.ok === false) {
@@ -239,7 +252,7 @@ function slugCandidates(title) {
 function requestSlugCandidates(title, season) {
   var candidates = slugCandidates(title);
   if (season > 1 && candidates.length > 0) {
-    candidates.push(candidates[0] + "-" + season);
+    candidates.unshift(candidates[0] + "-" + season);
   }
   return dedupe(candidates);
 }
@@ -583,7 +596,7 @@ function buildCandidateUrls(request) {
   var urls = [];
   for (var i = 0; i < channels.length; i++) {
     var channel = channels[i];
-    var slugs = request.slugCandidates || [];
+    var slugs = (request.slugCandidates || []).slice(0, 2);
     for (var j = 0; j < slugs.length; j++) {
       var slug = slugs[j];
       urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/");
@@ -599,7 +612,7 @@ function buildSearchUrls(request) {
     return [];
   }
   var dateQuery = dateSlug.replace(/-/g, " ");
-  var slugs = request.slugCandidates || [];
+  var slugs = (request.slugCandidates || []).slice(0, 2);
   var urls = [];
   for (var i = 0; i < slugs.length; i++) {
     urls.push(
@@ -823,17 +836,11 @@ function resolveDesiSerials(request, options) {
   var archiveUrls = buildCandidateUrls(request).desiSerials;
   var searchUrls = buildSearchUrls(request);
   if (searchUrls.length > 0) {
-    return Promise.all(
-      searchUrls.map(function(url) {
-        return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS });
-      })
-    ).then(function(searchPages) {
-      var episodeUrls = dedupe(
-        searchPages.flatMap(function(page) {
-          return page ? episodePageCandidates(page, request) : [];
-        })
-      );
-      if (episodeUrls.length > 0) {
+    return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function(page) {
+      var episodeUrls = episodePageCandidates(page, request);
+      return episodeUrls.length > 0 ? episodeUrls : null;
+    }).then(function(episodeUrls) {
+      if (episodeUrls) {
         return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request);
       }
       return processArchive(fetchImpl, archiveUrls, request, 0);

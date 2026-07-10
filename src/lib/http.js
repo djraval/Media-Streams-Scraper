@@ -22,15 +22,16 @@ export function fetchText(fetchImpl, url, options) {
     .catch(function () { return null; });
 }
 
-// Same as fetchText but with AbortSignal.timeout when available (Node 18+ / modern browsers).
-// Used for speculative page-URL probes that often hang on 404 hosts.
-export function fetchTextTimeout(fetchImpl, url, options, ms) {
-  options = options || {};
-  ms = ms || 4000;
-  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
-    options = Object.assign({}, options, { signal: AbortSignal.timeout(ms) });
+export function fetchFirstResult(fetchImpl, urls, options, select) {
+  function next(index) {
+    if (index >= urls.length) return Promise.resolve(null);
+    return fetchText(fetchImpl, urls[index], options).then(function (text) {
+      if (!text) return next(index + 1);
+      var result = select(text, urls[index]);
+      return result === null || result === undefined ? next(index + 1) : result;
+    });
   }
-  return fetchText(fetchImpl, url, options);
+  return next(0);
 }
 
 export function fetchJson(fetchImpl, url) {

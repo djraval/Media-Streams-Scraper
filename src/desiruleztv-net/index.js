@@ -4,7 +4,7 @@
 // Note: iframes use protocol-relative URLs (//vkspeed.com/...) which are normalized to https://.
 
 import { TMDB_API_KEY, BROWSER_HEADERS, VKSPEED_HOSTS, VKPRIME_HOSTS } from "../lib/constants.js";
-import { resolveFetch, fetchText, fetchContentLength } from "../lib/http.js";
+import { resolveFetch, fetchText, fetchFirstResult, fetchContentLength } from "../lib/http.js";
 import { dedupe, dedupeStreams, isPlaceholderUrl, embedHostRegex, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
@@ -81,7 +81,7 @@ function buildSearchUrls(request) {
     return [];
   }
   var dateQuery = dateSlug.replace(/-/g, " ");
-  return (request.slugCandidates || []).map(function (slug) {
+  return (request.slugCandidates || []).slice(0, 2).map(function (slug) {
     return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
   });
 }
@@ -91,7 +91,7 @@ function buildSearchUrls(request) {
 // archives at /category/{slug}/page/2/ and /category/{slug}/page/3/.
 function buildArchiveUrls(request) {
   var urls = [];
-  var slugs = request.slugCandidates || [];
+  var slugs = (request.slugCandidates || []).slice(0, 2);
   for (var i = 0; i < slugs.length; i += 1) {
     urls.push(SITE_BASE + CATEGORY_PATH + slugs[i] + "/");
     urls.push(SITE_BASE + CATEGORY_PATH + slugs[i] + ARCHIVE_PAGE_PATH + "2/");
@@ -237,17 +237,11 @@ function resolveDesiRulezTV(request, options) {
   var archiveUrls = buildArchiveUrls(request);
 
   if (searchUrls.length > 0) {
-    return Promise.all(
-      searchUrls.map(function (url) {
-        return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS });
-      })
-    ).then(function (searchPages) {
-      var episodeUrls = dedupe(
-        searchPages.flatMap(function (page) {
-          return page ? episodePageCandidates(page, request) : [];
-        })
-      );
-      if (episodeUrls.length > 0) {
+    return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function (page) {
+      var episodeUrls = episodePageCandidates(page, request);
+      return episodeUrls.length > 0 ? episodeUrls : null;
+    }).then(function (episodeUrls) {
+      if (episodeUrls) {
         return resolveFromEpisodeUrls(fetchImpl, episodeUrls);
       }
       return processArchive(fetchImpl, archiveUrls, request, 0);

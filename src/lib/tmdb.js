@@ -43,7 +43,7 @@ export function slugCandidates(title) {
 export function requestSlugCandidates(title, season) {
   var candidates = slugCandidates(title);
   if (season > 1 && candidates.length > 0) {
-    candidates.push(candidates[0] + "-" + season);
+    candidates.unshift(candidates[0] + "-" + season);
   }
   return dedupe(candidates);
 }

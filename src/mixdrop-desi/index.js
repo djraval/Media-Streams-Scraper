@@ -4,7 +4,7 @@
 // function extracts MDCore.wurl to obtain a direct MP4 URL on *.mxcontent.net.
 
 import { BROWSER_HEADERS, UA } from "../lib/constants.js";
-import { resolveFetch, browserHeaders, fetchText, fetchTextTimeout, fetchContentLength } from "../lib/http.js";
+import { resolveFetch, browserHeaders, fetchText, fetchFirstResult, fetchContentLength } from "../lib/http.js";
 import { dedupe, dedupeStreams, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, slugCandidates } from "../lib/tmdb.js";
 import { unpack } from "../lib/packer.js";
@@ -336,6 +336,15 @@ function buildEpisodePageUrls(request) {
     return s.replace(/\{season\}/g, String(season));
   });
 
+  for (var pi = 0; pi < slugs.length; pi++) {
+    for (var pyi = 0; pyi < years.length; pyi++) {
+      urls.push(
+        WATCH_MOVIES_BASE + slugs[pi] + "-" + years[pyi] + "-ep-" +
+        String(episode).padStart(2, "0") + expandedSuffixes[0]
+      );
+    }
+  }
+
   for (var i = 0; i < slugs.length; i++) {
     var slug = slugs[i];
 
@@ -435,27 +444,18 @@ function buildMoviePageUrls(request) {
 // Stream resolution pipeline
 // ---------------------------------------------------------------------------
 
-// ponytail: race page URLs with short timeout, stop once any page yields embeds.
-// Firing every year/slug variant and waiting for all hangs (~120s on CF dead ends).
 function resolveFromEpisodePages(fetchImpl, episodeUrls) {
-  if (episodeUrls.length === 0) {
-    return Promise.resolve([]);
-  }
-
-  var PAGE_TIMEOUT_MS = 4000;
-  var BATCH = 6;
-  var allEmbeds = [];
-  var index = 0;
-
-  function resolveEmbeds() {
-    if (allEmbeds.length === 0) return Promise.resolve([]);
+  if (episodeUrls.length === 0) return Promise.resolve([]);
+  return fetchFirstResult(fetchImpl, episodeUrls.slice(0, 8), { headers: BROWSER_HEADERS }, function (html) {
+    return html;
+  }).then(function (page) {
+    var embeds = findMixDropEmbeds(page || "");
+    if (embeds.length === 0) return [];
     return Promise.all(
-      allEmbeds.map(function (embed) {
+      embeds.map(function (embed) {
         return resolveMixDrop(embed.url, WATCH_MOVIES_BASE, { fetchImpl: fetchImpl })
           .then(function (stream) {
-            if (stream && embed.quality && stream.quality === "unknown") {
-              stream.quality = embed.quality;
-            }
+            if (stream && embed.quality && stream.quality === "unknown") stream.quality = embed.quality;
             return stream;
           })
           .catch(function () { return null; });
@@ -463,31 +463,7 @@ function resolveFromEpisodePages(fetchImpl, episodeUrls) {
     ).then(function (resolved) {
       return dedupeStreams(resolved);
     });
-  }
-
-  function nextBatch() {
-    if (allEmbeds.length > 0 || index >= episodeUrls.length) {
-      return resolveEmbeds();
-    }
-    var batch = episodeUrls.slice(index, index + BATCH);
-    index += BATCH;
-    return Promise.all(
-      batch.map(function (url) {
-        return fetchTextTimeout(fetchImpl, url, { headers: BROWSER_HEADERS }, PAGE_TIMEOUT_MS);
-      })
-    ).then(function (pages) {
-      for (var i = 0; i < pages.length; i++) {
-        if (!pages[i]) continue;
-        var embeds = findMixDropEmbeds(pages[i]);
-        for (var j = 0; j < embeds.length; j++) {
-          allEmbeds.push(embeds[j]);
-        }
-      }
-      return nextBatch();
-    });
-  }
-
-  return nextBatch();
+  });
 }
 
 function resolveMixDropDesi(request, options) {
