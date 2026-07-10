@@ -49,7 +49,11 @@ export function fetchContentLength(fetchImpl, url, headers) {
     .catch(function () { return 0; });
 }
 
-// --- Binary fetch with axios fallback ---
+// --- Binary fetch ---
+// In the Nuvio QuickJS sandbox, response.arrayBuffer() is unreliable (may hang
+// or return empty). Go straight to axios which is provided by the sandbox and
+// handles arraybuffer responses reliably. Falls back to fetch+arrayBuffer only
+// if axios is unavailable (e.g. Node.js testing without axios installed).
 
 export function fetchBinaryViaAxios(url, headers, rangeBytes) {
   try {
@@ -69,37 +73,43 @@ export function fetchBinaryViaAxios(url, headers, rangeBytes) {
       })
       .catch(function () { return null; });
   } catch (e) {
-    return Promise.resolve(null);
+    return null;
   }
 }
 
-export function fetchBinary(url, headers, rangeBytes) {
+export function fetchBinaryViaFetch(url, headers, rangeBytes) {
   var rangeEnd = (rangeBytes || 65536) - 1;
   var rangeHeaders = Object.assign({}, headers || {}, {
     Range: "bytes=0-" + rangeEnd,
   });
-
-  if (typeof fetch !== "undefined") {
-    return fetch(url, { headers: rangeHeaders })
-      .then(function (response) {
-        if (!response || (response.ok === false && response.status !== 206 && response.status !== 200)) {
-          return null;
-        }
-        if (typeof response.arrayBuffer === "function") {
-          return response.arrayBuffer();
-        }
+  return fetch(url, { headers: rangeHeaders })
+    .then(function (response) {
+      if (!response || (response.ok === false && response.status !== 206 && response.status !== 200)) {
         return null;
-      })
-      .then(function (buffer) {
-        if (buffer && buffer.byteLength >= 16) {
-          return new Uint8Array(buffer);
-        }
-        return fetchBinaryViaAxios(url, headers, rangeBytes);
-      })
-      .catch(function () {
-        return fetchBinaryViaAxios(url, headers, rangeBytes);
-      });
-  }
+      }
+      if (typeof response.arrayBuffer === "function") {
+        return response.arrayBuffer();
+      }
+      return null;
+    })
+    .then(function (buffer) {
+      if (buffer && buffer.byteLength >= 16) {
+        return new Uint8Array(buffer);
+      }
+      return null;
+    })
+    .catch(function () { return null; });
+}
 
-  return fetchBinaryViaAxios(url, headers, rangeBytes);
+export function fetchBinary(url, headers, rangeBytes) {
+  // Try axios first — it's reliable in the Nuvio sandbox for binary data.
+  // Only fall back to fetch+arrayBuffer if axios is not available.
+  var axiosResult = fetchBinaryViaAxios(url, headers, rangeBytes);
+  if (axiosResult) {
+    return axiosResult;
+  }
+  if (typeof fetch !== "undefined") {
+    return fetchBinaryViaFetch(url, headers, rangeBytes);
+  }
+  return Promise.resolve(null);
 }

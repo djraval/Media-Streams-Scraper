@@ -43,7 +43,7 @@ export function rankedMp4Candidates(raw) {
 
 export function mp4QualityLabel(height) {
   if (!height) return "unknown";
-  return height + "p";
+  return height < 480 ? "unknown" : height + "p";
 }
 
 export function resolveVkPlayer(embedUrl, refererUrl, options) {

@@ -96,33 +96,40 @@ function fetchBinaryViaAxios(url, headers, rangeBytes) {
       return null;
     });
   } catch (e) {
-    return Promise.resolve(null);
+    return null;
   }
 }
-function fetchBinary(url, headers, rangeBytes) {
+function fetchBinaryViaFetch(url, headers, rangeBytes) {
   var rangeEnd = (rangeBytes || 65536) - 1;
   var rangeHeaders = Object.assign({}, headers || {}, {
     Range: "bytes=0-" + rangeEnd
   });
-  if (typeof fetch !== "undefined") {
-    return fetch(url, { headers: rangeHeaders }).then(function(response) {
-      if (!response || response.ok === false && response.status !== 206 && response.status !== 200) {
-        return null;
-      }
-      if (typeof response.arrayBuffer === "function") {
-        return response.arrayBuffer();
-      }
+  return fetch(url, { headers: rangeHeaders }).then(function(response) {
+    if (!response || response.ok === false && response.status !== 206 && response.status !== 200) {
       return null;
-    }).then(function(buffer) {
-      if (buffer && buffer.byteLength >= 16) {
-        return new Uint8Array(buffer);
-      }
-      return fetchBinaryViaAxios(url, headers, rangeBytes);
-    }).catch(function() {
-      return fetchBinaryViaAxios(url, headers, rangeBytes);
-    });
+    }
+    if (typeof response.arrayBuffer === "function") {
+      return response.arrayBuffer();
+    }
+    return null;
+  }).then(function(buffer) {
+    if (buffer && buffer.byteLength >= 16) {
+      return new Uint8Array(buffer);
+    }
+    return null;
+  }).catch(function() {
+    return null;
+  });
+}
+function fetchBinary(url, headers, rangeBytes) {
+  var axiosResult = fetchBinaryViaAxios(url, headers, rangeBytes);
+  if (axiosResult) {
+    return axiosResult;
   }
-  return fetchBinaryViaAxios(url, headers, rangeBytes);
+  if (typeof fetch !== "undefined") {
+    return fetchBinaryViaFetch(url, headers, rangeBytes);
+  }
+  return Promise.resolve(null);
 }
 
 // src/lib/html.js
@@ -478,7 +485,7 @@ function rankedMp4Candidates(raw) {
 function mp4QualityLabel(height) {
   if (!height)
     return "unknown";
-  return height + "p";
+  return height < 480 ? "unknown" : height + "p";
 }
 function resolveVkPlayer(embedUrl, refererUrl, options) {
   options = options || {};
