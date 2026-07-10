@@ -54,6 +54,43 @@ function dedupe(values) {
   return out;
 }
 
+// ponytail: shared helpers — killed 3 copy-paste sites + 7× fetchImpl boilerplate + 4× headers boilerplate.
+function resolveFetch(options) {
+  return (options && options.fetchImpl) || (typeof fetch !== "undefined" ? fetch : null);
+}
+
+function browserHeaders(referer) {
+  return { headers: Object.assign({}, BROWSER_HEADERS, { Referer: referer }) };
+}
+
+// Dedupe resolved streams by url + sourceTag. Was duplicated in resolveFromEpisodeUrls and getStreamsForRequest.
+function dedupeStreams(streams) {
+  const seen = new Set();
+  const out = [];
+  for (const stream of streams) {
+    if (!stream || !stream.url) {
+      continue;
+    }
+    const key = stream.url + "\0" + (stream.sourceTag || "");
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(stream);
+    }
+  }
+  return out;
+}
+
+// Next non-comment, non-blank URI line at/after `from` — shared by both HLS playlist parsers.
+function nextUriLine(lines, from) {
+  for (let j = from; j < lines.length; j += 1) {
+    const line = lines[j].trim();
+    if (line && !line.startsWith("#")) {
+      return line;
+    }
+  }
+  return "";
+}
+
 function decodeText(raw) {
   let text = String(raw || "")
     .replace(/&amp;/gi, "&")
@@ -295,7 +332,7 @@ function tmdbUrl(path, tmdbApiKey) {
 
 function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
   options = options || {};
-  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  const fetchImpl = resolveFetch(options);
   const tmdbApiKey = options.tmdbApiKey;
   if (!tmdbApiKey) {
     return Promise.reject(new Error("TMDB API key is required"));
@@ -465,10 +502,8 @@ function fetchContentLength(fetchImpl, url, headers) {
 
 function resolveVkPlayer(embedUrl, refererUrl, options) {
   options = options || {};
-  var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
-  return fetchText(fetchImpl, embedUrl, {
-    headers: Object.assign({}, BROWSER_HEADERS, { Referer: refererUrl }),
-  })
+  var fetchImpl = resolveFetch(options);
+  return fetchText(fetchImpl, embedUrl, browserHeaders(refererUrl))
     .then(function (player) {
       if (!player) {
         return null;
@@ -523,14 +558,7 @@ function parseHlsMasterPlaylist(raw, baseUrl) {
       // Prefer AVERAGE-BANDWIDTH for size estimation (closer to actual bytes);
       // fall back to BANDWIDTH (peak) if not present.
       var bandwidth = avgBwMatch ? Number(avgBwMatch[1]) : (bwMatch ? Number(bwMatch[1]) : 0);
-      var urlLine = "";
-      for (var j = i + 1; j < lines.length; j++) {
-        var next = lines[j].trim();
-        if (next && !next.startsWith("#")) {
-          urlLine = next;
-          break;
-        }
-      }
+      var urlLine = nextUriLine(lines, i + 1);
       if (urlLine) {
         variants.push({
           url: resolveRelativeUrl(baseUrl, urlLine),
@@ -556,12 +584,9 @@ function parseHlsMediaPlaylist(raw, baseUrl) {
       var durMatch = line.match(/#EXTINF:([\d.]+)/i);
       var duration = durMatch ? Number(durMatch[1]) : 0;
       totalDuration += duration;
-      for (var j = i + 1; j < lines.length; j++) {
-        var next = lines[j].trim();
-        if (next && !next.startsWith("#")) {
-          segments.push({ url: resolveRelativeUrl(baseUrl, next), duration: duration });
-          break;
-        }
+      var urlLine = nextUriLine(lines, i + 1);
+      if (urlLine) {
+        segments.push({ url: resolveRelativeUrl(baseUrl, urlLine), duration: duration });
       }
     }
   }
@@ -628,13 +653,13 @@ function flowVariantLabel(url) {
     return "";
   }
   var variant = match[1].toLowerCase();
-  if (variant.indexOf("embed") === 0) {
+  if (variant.startsWith("embed")) {
     return "embed";
   }
-  if (variant.indexOf("plyr") === 0) {
+  if (variant.startsWith("plyr")) {
     return "plyr";
   }
-  if (variant.indexOf("nflix") === 0) {
+  if (variant.startsWith("nflix")) {
     return "nflix";
   }
   return variant;
@@ -659,11 +684,9 @@ function formatDuration(seconds) {
 
 function resolveFlowPlayer(playerUrl, refererUrl, options) {
   options = options || {};
-  var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  var fetchImpl = resolveFetch(options);
   var streamHeaders = { Referer: playerUrl, "User-Agent": UA };
-  return fetchText(fetchImpl, playerUrl, {
-    headers: Object.assign({}, BROWSER_HEADERS, { Referer: refererUrl }),
-  })
+  return fetchText(fetchImpl, playerUrl, browserHeaders(refererUrl))
     .then(function (player) {
       if (!player) {
         return null;
@@ -677,65 +700,55 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
       if (!masterUrl) {
         return null;
       }
-      return fetchText(fetchImpl, masterUrl, {
-        headers: Object.assign({}, BROWSER_HEADERS, { Referer: playerUrl }),
-      }).then(function (manifest) {
-        // If this is a master playlist, fetch the highest-quality variant
-        // to parse segment durations and estimate size.
+      return fetchText(fetchImpl, masterUrl, browserHeaders(playerUrl)).then(function (manifest) {
         var variants = parseHlsMasterPlaylist(manifest, masterUrl);
+        var variantManifestPromise;
         if (variants.length > 0) {
           var best = variants[0];
           var quality = best.height > 0 ? best.height + "p" : hlsQualityFromManifest(manifest);
-          return fetchText(fetchImpl, best.url, {
-            headers: Object.assign({}, BROWSER_HEADERS, { Referer: playerUrl }),
-          }).then(function (variantManifest) {
-            var media = parseHlsMediaPlaylist(variantManifest, best.url);
-            return estimateHlsSize(fetchImpl, media.segments, streamHeaders, best.bandwidth, media.totalDuration).then(function (estimatedSize) {
-              return {
-                backend: "flow",
-                kind: "hls",
-                quality: quality,
-                url: masterUrl,
-                size: formatBytes(estimatedSize),
-                duration: media.totalDuration,
-                sourceTag: flowVariantLabel(playerUrl),
-                headers: streamHeaders,
-              };
+          variantManifestPromise = fetchText(fetchImpl, best.url, browserHeaders(playerUrl))
+            .then(function (vm) {
+              return { parsed: parseHlsMediaPlaylist(vm, best.url), quality: quality, bandwidth: best.bandwidth, url: masterUrl };
+            })
+            .catch(function () {
+              return { parsed: { segments: [], totalDuration: 0 }, quality: quality, bandwidth: best.bandwidth, url: masterUrl, sizeSkipped: true };
             });
-          }).catch(function () {
-            return {
-              backend: "flow",
-              kind: "hls",
-              quality: quality,
-              url: masterUrl,
-              size: "",
-              duration: 0,
-              sourceTag: flowVariantLabel(playerUrl),
-              headers: streamHeaders,
-            };
+        } else {
+          variantManifestPromise = Promise.resolve({
+            parsed: parseHlsMediaPlaylist(manifest, masterUrl),
+            quality: hlsQualityFromManifest(manifest),
+            bandwidth: 0,
+            url: masterUrl,
           });
         }
-        // Direct media playlist (no master/variant layer)
-        var media = parseHlsMediaPlaylist(manifest, masterUrl);
-        return estimateHlsSize(fetchImpl, media.segments, streamHeaders, 0, media.totalDuration).then(function (estimatedSize) {
-          return {
-            backend: "flow",
-            kind: "hls",
-            quality: hlsQualityFromManifest(manifest),
-            url: masterUrl,
-            size: formatBytes(estimatedSize),
-            duration: media.totalDuration,
-            sourceTag: flowVariantLabel(playerUrl),
-            headers: streamHeaders,
-          };
+        return variantManifestPromise.then(function (info) {
+          if (info.sizeSkipped) {
+            return buildFlowStream(info.quality, "", 0, playerUrl, streamHeaders, masterUrl);
+          }
+          return estimateHlsSize(fetchImpl, info.parsed.segments, streamHeaders, info.bandwidth, info.parsed.totalDuration).then(function (estimatedSize) {
+            return buildFlowStream(info.quality, formatBytes(estimatedSize), info.parsed.totalDuration, playerUrl, streamHeaders, masterUrl);
+          });
         });
       });
     });
 }
 
+function buildFlowStream(quality, size, duration, playerUrl, streamHeaders, url) {
+  return {
+    backend: "flow",
+    kind: "hls",
+    quality: quality,
+    url: url,
+    size: size,
+    duration: duration,
+    sourceTag: flowVariantLabel(playerUrl),
+    headers: streamHeaders,
+  };
+}
+
 function resolveTvarticlesPage(tvarticlesUrl, options) {
   options = options || {};
-  var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  var fetchImpl = resolveFetch(options);
   return fetchText(fetchImpl, tvarticlesUrl, { headers: BROWSER_HEADERS })
     .then(function (page) {
       if (!page) {
@@ -779,25 +792,14 @@ function resolveFromEpisodeUrls(fetchImpl, episodeUrls, request) {
         return resolveTvarticlesPage(url, { fetchImpl: fetchImpl });
       })
     ).then(function (resolved) {
-      var seen = new Set();
-      var streams = [];
-      for (var i = 0; i < resolved.length; i++) {
-        var stream = resolved[i];
-        if (!stream) { continue; }
-        var dedupeKey = stream.url + "\0" + (stream.sourceTag || "");
-        if (!seen.has(dedupeKey)) {
-          seen.add(dedupeKey);
-          streams.push(stream);
-        }
-      }
-      return streams;
+      return dedupeStreams(resolved);
     });
   });
 }
 
 function resolveDesiSerials(request, options) {
   options = options || {};
-  var fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  var fetchImpl = resolveFetch(options);
   var archiveUrls = buildCandidateUrls(request).desiSerials;
   var searchUrls = buildSearchUrls(request);
 
@@ -890,27 +892,16 @@ function toNuvioStream(request, stream) {
 
 function getStreamsForRequest(request, options) {
   options = options || {};
-  const fetchImpl = options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
-  const seen = new Set();
-  const streams = [];
+  const fetchImpl = resolveFetch(options);
   return resolveDesiSerials(request, { fetchImpl: fetchImpl })
     .then(function (resolved) {
-      for (const stream of resolved) {
-        if (!stream || !stream.url) {
-          continue;
-        }
-        const dedupeKey = stream.url + "\0" + (stream.sourceTag || "");
-        if (seen.has(dedupeKey)) {
-          continue;
-        }
-        seen.add(dedupeKey);
-        streams.push(toNuvioStream(request, stream));
-      }
-      return streams;
+      return dedupeStreams(resolved).map(function (stream) {
+        return toNuvioStream(request, stream);
+      });
     })
     .catch(function (error) {
       console.log("[Desi-Serials.to] resolver failed: " + error.message);
-      return streams;
+      return [];
     });
 }
 
