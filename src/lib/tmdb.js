@@ -89,7 +89,13 @@ export function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
         return fetchJson(
           fetchImpl,
           tmdbUrl("/tv/" + tmdbId + "/season/" + season + "/episode/" + episode, tmdbApiKey),
-        );
+        ).then(function (ep) {
+          return ep;
+        }, function () {
+          // Episode not in TMDB (e.g. long-running shows with incomplete data).
+          // Fall back to show-level info so WordPress search can still find it.
+          return { air_date: "", name: "", runtime: 0 };
+        });
       })
       .then(function (ep) {
         var title = tvInfo.name || tvInfo.original_name || "";

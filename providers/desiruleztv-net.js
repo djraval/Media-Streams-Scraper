@@ -174,13 +174,14 @@ function attrValues(markup, tags, attrs) {
   var tagPattern = new RegExp("<\\s*(" + tagAlternation + ")\\b[^>]*>", "gis");
   var attrPattern = new RegExp(
     "\\b(" + attrAlternation + `)\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`,
-    "i"
+    "gi"
   );
   var values = [];
   var tag;
   while ((tag = tagPattern.exec(String(markup || ""))) !== null) {
-    var attr = tag[0].match(attrPattern);
-    if (attr) {
+    var attr;
+    attrPattern.lastIndex = 0;
+    while ((attr = attrPattern.exec(tag[0])) !== null) {
       values.push(decodeText((attr[2] || attr[3] || attr[4] || "").trim()));
     }
   }
@@ -195,7 +196,8 @@ function iframeSrcCandidates(markup) {
       "src",
       "data-src",
       "data-wpfc-original-src",
-      "data-lazy-src"
+      "data-lazy-src",
+      "data-litespeed-src"
     ])
   );
 }
@@ -272,7 +274,11 @@ function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
       return fetchJson(
         fetchImpl,
         tmdbUrl("/tv/" + tmdbId + "/season/" + season + "/episode/" + episode, tmdbApiKey)
-      );
+      ).then(function(ep) {
+        return ep;
+      }, function() {
+        return { air_date: "", name: "", runtime: 0 };
+      });
     }).then(function(ep) {
       var title = tvInfo.name || tvInfo.original_name || "";
       var networkCandidates = channelSlugCandidates(

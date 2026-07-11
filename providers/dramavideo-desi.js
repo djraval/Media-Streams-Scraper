@@ -355,117 +355,163 @@ function toNuvioStream(request, stream) {
   };
 }
 
-// src/lib/vidup.js
-var VIDUP_HOSTS = ["vidup.site"];
-var BLOGGER_VIDEO_PAGE = "https://www.blogger.com/video.g?token=";
-var BLOGGER_BATCH_BASE = "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute";
-var BLOGGER_RPC_ID = "WcwnYd";
-var ITAG_QUALITY = {
-  18: "360p",
-  22: "720p"
-};
-function isVidUpUrl(url) {
-  var str = String(url || "");
-  for (var i = 0; i < VIDUP_HOSTS.length; i++) {
-    if (str.indexOf(VIDUP_HOSTS[i]) !== -1)
-      return true;
-  }
-  return false;
-}
-function extractBloggerToken(html) {
-  var match = String(html || "").match(/blogger\.com\/video\.g\?token=([^"&]+)/);
-  return match ? match[1] : "";
-}
-function extractBloggerSession(html) {
-  var text = String(html || "");
-  var sidMatch = text.match(/"FdrFJe":"([^"]+)"/);
-  var blMatch = text.match(/"cfb2h":"([^"]+)"/);
-  return {
-    formSessionId: sidMatch ? sidMatch[1] : "",
-    blogId: blMatch ? blMatch[1] : ""
-  };
-}
-function bloggerBatchExecute(fetchImpl, token, session) {
-  var reqid = String(Date.now() / 1e3 % 86400 | 0);
-  var url = BLOGGER_BATCH_BASE + "?rpcids=" + BLOGGER_RPC_ID + "&source-path=%2Fvideo.g&f.sid=" + encodeURIComponent(session.formSessionId) + "&bl=" + encodeURIComponent(session.blogId) + "&hl=en-US&_reqid=" + reqid + "&rt=c";
-  var innerParam = '["' + token + '","",0]';
-  var reqPayload = JSON.stringify([[[BLOGGER_RPC_ID, innerParam, null, "generic"]]]);
-  var body = "f.req=" + encodeURIComponent(reqPayload);
-  return fetchImpl(url, {
-    method: "POST",
-    headers: Object.assign({}, BROWSER_HEADERS, {
-      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-      "Referer": "https://www.blogger.com/",
-      "X-Same-Domain": "1"
-    }),
-    body
-  }).then(function(response) {
-    if (!response || response.ok === false)
-      return null;
-    return response.text();
-  }).catch(function() {
-    return null;
-  });
-}
-function parseBloggerVideoUrls(responseText) {
-  var text = String(responseText || "");
-  if (!text)
-    return [];
-  text = text.replace(/\\\\u003d/g, "=").replace(/\\\\u0026/g, "&");
-  text = text.replace(/\\\\u003f/g, "?").replace(/\\\\u002f/g, "/");
-  text = text.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-  text = text.replace(/\\u003f/g, "?").replace(/\\u002f/g, "/");
-  var urlRe = /https:\/\/rr\d+---sn-[a-z0-9]+\.googlevideo\.com\/videoplayback[^"]+/g;
-  var itagRe = /itag=(\d+)/;
-  var results = [];
-  var match;
-  while ((match = urlRe.exec(text)) !== null) {
-    var url = match[0];
-    var itagMatch = url.match(itagRe);
-    var itag = itagMatch ? Number(itagMatch[1]) : 0;
-    var quality = ITAG_QUALITY[itag] || "unknown";
-    results.push({ url, itag, quality });
-  }
-  var seen = /* @__PURE__ */ new Set();
-  var deduped = [];
-  for (var i = 0; i < results.length; i++) {
-    if (!seen.has(results[i].url)) {
-      seen.add(results[i].url);
-      deduped.push(results[i]);
+// src/lib/filemoon.js
+function base64UrlToBytes(str) {
+  var input = String(str || "").replace(/-/g, "+").replace(/_/g, "/");
+  var pad = input.length % 4;
+  if (pad)
+    input += "====".substring(0, 4 - pad);
+  var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var output = [];
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < input.length; i++) {
+    var ch = input.charAt(i);
+    if (ch === "=")
+      break;
+    var idx = chars.indexOf(ch);
+    if (idx === -1)
+      continue;
+    buffer = buffer << 6 | idx;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output.push(buffer >> bits & 255);
     }
   }
-  deduped.sort(function(a, b) {
-    return b.itag - a.itag;
-  });
-  return deduped;
+  return new Uint8Array(output);
 }
-function resolveVidUpEmbed(fetchImpl, vidupUrl) {
-  return fetchText(fetchImpl, vidupUrl, { headers: BROWSER_HEADERS }).then(function(html) {
+function bytesToString(bytes) {
+  var arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  var str = "";
+  var chunk = 32768;
+  for (var i = 0; i < arr.length; i += chunk) {
+    str += String.fromCharCode.apply(null, arr.subarray(i, Math.min(i + chunk, arr.length)));
+  }
+  return str;
+}
+
+// src/lib/dramavideo.js
+var DRAMAVIDEO_WATCH_RE = /dramavideo\.se\/watch\?v=(\d+)/i;
+var PLAYER_HOST = "https://player.dramavideo.se/";
+var PLAYER_REFERER = "https://dramavideo.se/";
+function isDramavideoUrl(url) {
+  return DRAMAVIDEO_WATCH_RE.test(String(url || ""));
+}
+function extractWatchId(url) {
+  var match = String(url || "").match(DRAMAVIDEO_WATCH_RE);
+  return match ? match[1] : "";
+}
+function extractServerAttrs(html) {
+  var text = String(html || "");
+  var liMatch = text.match(/<li[^>]*class="linkserver"[^>]*>/i);
+  if (!liMatch)
+    return null;
+  var liTag = liMatch[0];
+  var videoMatch = liTag.match(/data-video="([^"]+)"/);
+  var providerMatch = liTag.match(/data-provider="([^"]+)"/);
+  if (!videoMatch || !providerMatch)
+    return null;
+  return { videoId: videoMatch[1], provider: providerMatch[1] };
+}
+function hexToBytes(hex) {
+  var str = String(hex || "");
+  var bytes = [];
+  for (var i = 0; i < str.length; i += 2) {
+    bytes.push(parseInt(str.substr(i, 2), 16));
+  }
+  return new Uint8Array(bytes);
+}
+function base64ToBytes(b64) {
+  var b64url = String(b64 || "").replace(/\+/g, "-").replace(/\//g, "_");
+  return base64UrlToBytes(b64url);
+}
+function aesCbcDecryptSubtle(encDataBase64, keyHex, ivHex) {
+  var subtle = typeof crypto !== "undefined" && crypto.subtle || typeof globalThis !== "undefined" && globalThis.crypto && globalThis.crypto.subtle;
+  if (!subtle)
+    return Promise.reject(new Error("crypto.subtle not available"));
+  var keyBytes = hexToBytes(keyHex);
+  var ivBytes = hexToBytes(ivHex);
+  var ctBytes = base64ToBytes(encDataBase64);
+  return subtle.importKey("raw", keyBytes, { name: "AES-CBC" }, false, ["decrypt"]).then(function(key) {
+    return subtle.decrypt({ name: "AES-CBC", iv: ivBytes }, key, ctBytes);
+  }).then(function(decrypted) {
+    return bytesToString(new Uint8Array(decrypted));
+  });
+}
+function aesCbcDecryptCryptoJS(encDataBase64, keyHex, ivHex) {
+  var CryptoJS = typeof require === "function" ? require("crypto-js") : null;
+  if (!CryptoJS)
+    return Promise.reject(new Error("crypto-js not available"));
+  var key = CryptoJS.enc.Hex.parse(keyHex);
+  var iv = CryptoJS.enc.Hex.parse(ivHex);
+  var cipherParams = CryptoJS.lib.CipherParams.create({
+    ciphertext: CryptoJS.enc.Base64.parse(encDataBase64)
+  });
+  var decrypted = CryptoJS.AES.decrypt(cipherParams, key, {
+    iv,
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7
+  });
+  return Promise.resolve(decrypted.toString(CryptoJS.enc.Utf8));
+}
+function aesCbcDecrypt(encDataBase64, keyHex, ivHex) {
+  return aesCbcDecryptSubtle(encDataBase64, keyHex, ivHex).catch(function() {
+    return aesCbcDecryptCryptoJS(encDataBase64, keyHex, ivHex);
+  });
+}
+function parseDecryptedSources(html) {
+  var text = String(html || "");
+  var match = text.match(/JSON\.parse\(`(\[[^\]]+\])`\)/);
+  if (!match)
+    return [];
+  try {
+    return JSON.parse(match[1]);
+  } catch (e) {
+    return [];
+  }
+}
+function decryptPlayerPage(fetchImpl, videoId, provider) {
+  var playerUrl = PLAYER_HOST + "?id=" + videoId + "&sv=" + provider;
+  var headers = Object.assign({}, BROWSER_HEADERS, { Referer: PLAYER_REFERER });
+  return fetchText(fetchImpl, playerUrl, { headers }).then(function(html) {
     if (!html)
-      return { token: "", session: null };
-    var token = extractBloggerToken(html);
-    if (!token)
-      return { token: "", session: null };
-    return fetchText(fetchImpl, BLOGGER_VIDEO_PAGE + token, { headers: BROWSER_HEADERS }).then(function(bloggerHtml) {
-      if (!bloggerHtml)
-        return { token, session: null };
-      return { token, session: extractBloggerSession(bloggerHtml) };
-    });
-  }).then(function(result) {
-    if (!result.token || !result.session || !result.session.formSessionId)
+      return null;
+    var encMatch = html.match(/encData="([^"]+)"/);
+    var keyMatch = html.match(/keyHex="([^"]+)"/);
+    var ivMatch = html.match(/ivHex="([^"]+)"/);
+    if (!encMatch || !keyMatch || !ivMatch)
+      return null;
+    return aesCbcDecrypt(encMatch[1], keyMatch[1], ivMatch[1]);
+  });
+}
+function resolveDramavideoEmbed(fetchImpl, watchUrl) {
+  var watchId = extractWatchId(watchUrl);
+  if (!watchId)
+    return Promise.resolve([]);
+  return fetchText(fetchImpl, watchUrl, { headers: BROWSER_HEADERS }).then(function(html) {
+    if (!html)
       return [];
-    return bloggerBatchExecute(fetchImpl, result.token, result.session);
-  }).then(function(responseText) {
-    if (!responseText)
+    var attrs = extractServerAttrs(html);
+    if (!attrs)
       return [];
-    var urls = parseBloggerVideoUrls(responseText);
-    return urls.map(function(item) {
+    return decryptPlayerPage(fetchImpl, attrs.videoId, attrs.provider);
+  }).then(function(decryptedHtml) {
+    if (!decryptedHtml)
+      return [];
+    var sources = parseDecryptedSources(decryptedHtml);
+    return sources.filter(function(s) {
+      return s.file && s.type === "hls";
+    }).map(function(s) {
+      var qualityMatch = (s.label || "").match(/(\d{3,4})p?/i);
+      var quality = qualityMatch ? qualityMatch[1] + "p" : "720p";
       return {
-        url: item.url,
-        quality: item.quality,
-        name: "Blogger",
-        kind: "mp4",
-        sourceTag: "blogger"
+        url: s.file,
+        quality,
+        name: "DramaVideo",
+        kind: "hls",
+        sourceTag: "dramavideo",
+        headers: { Referer: PLAYER_HOST }
       };
     });
   }).catch(function() {
@@ -473,57 +519,31 @@ function resolveVidUpEmbed(fetchImpl, vidupUrl) {
   });
 }
 
-// src/vidup-desi/index.js
-var SITES = [
-  {
-    base: "https://yodesionline.net",
-    episodePatterns: [
-      "/{slug}-{date}-full-episode-{num}/"
-    ]
-  },
-  {
-    base: "https://desiserialonline.su",
-    episodePatterns: [
-      "/{slug}-{date}-video-episode-{num}/"
-    ]
-  }
-];
+// src/dramavideo-desi/index.js
+var SITE_BASE = "https://yehrishtakiakehlatahai.com";
+var EPISODE_PATTERN = "/{slug}-{date}-episode-{num}-video/";
 var SEARCH_PATH = "/?s=";
-function buildEpisodeUrls(site, slugCandidates2, dateSlug, episodeNum) {
-  var urls = [];
-  for (var s = 0; s < slugCandidates2.length; s++) {
-    for (var p = 0; p < site.episodePatterns.length; p++) {
-      var path = site.episodePatterns[p].replace("{slug}", slugCandidates2[s]).replace("{date}", dateSlug).replace("{num}", episodeNum);
-      urls.push(site.base + path);
-    }
-  }
-  return urls;
-}
-function buildAllEpisodeUrls(request) {
+function buildEpisodeUrls(request) {
   var dateSlug = episodeDateSlug(request.airDate);
   if (!dateSlug)
     return [];
-  var allUrls = [];
-  for (var i = 0; i < SITES.length; i++) {
-    var siteUrls = buildEpisodeUrls(SITES[i], request.slugCandidates, dateSlug, request.episode);
-    allUrls = allUrls.concat(siteUrls);
-  }
-  return allUrls;
-}
-function buildSearchUrls(request) {
   var urls = [];
-  var query = encodeURIComponent(request.title + " episode " + request.episode);
-  for (var i = 0; i < SITES.length; i++) {
-    urls.push(SITES[i].base + SEARCH_PATH + query);
+  for (var i = 0; i < request.slugCandidates.length; i++) {
+    var path = EPISODE_PATTERN.replace("{slug}", request.slugCandidates[i]).replace("{date}", dateSlug).replace("{num}", request.episode);
+    urls.push(SITE_BASE + path);
   }
   return urls;
 }
-function extractVidUpEmbeds(html) {
+function buildSearchUrl(request) {
+  var query = encodeURIComponent(request.title + " episode " + request.episode);
+  return SITE_BASE + SEARCH_PATH + query;
+}
+function extractDramavideoEmbeds(html) {
   var candidates = iframeSrcCandidates(html);
-  return dedupe(candidates.filter(isVidUpUrl));
+  return dedupe(candidates.filter(isDramavideoUrl));
 }
 function extractEpisodeLinks(html, episodeNum) {
-  var linkRe = /href="(https?:\/\/[^"]+\/[^"]*episode[^"]*)"/gi;
+  var linkRe = /href="(https?:\/\/yehrishtakiakehlatahai\.com\/[^"]*episode[^"]*)"/gi;
   var match;
   var urls = [];
   while ((match = linkRe.exec(String(html || ""))) !== null) {
@@ -536,7 +556,7 @@ function extractEpisodeLinks(html, episodeNum) {
 }
 function resolveAllEmbeds(fetchImpl, embeds) {
   return Promise.all(embeds.map(function(embedUrl) {
-    return resolveVidUpEmbed(fetchImpl, embedUrl);
+    return resolveDramavideoEmbed(fetchImpl, embedUrl);
   })).then(function(results) {
     var all = [];
     for (var i = 0; i < results.length; i++) {
@@ -548,9 +568,9 @@ function resolveAllEmbeds(fetchImpl, embeds) {
 function getStreamsForRequest(request, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  var urls = buildAllEpisodeUrls(request);
+  var urls = buildEpisodeUrls(request);
   return fetchFirstResult(fetchImpl, urls, { headers: BROWSER_HEADERS }, function(html) {
-    var embeds = extractVidUpEmbeds(html);
+    var embeds = extractDramavideoEmbeds(html);
     if (embeds.length === 0)
       return null;
     return embeds;
@@ -558,16 +578,16 @@ function getStreamsForRequest(request, options) {
     if (embeds) {
       return resolveAllEmbeds(fetchImpl, embeds);
     }
-    var searchUrls = buildSearchUrls(request);
-    return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function(html) {
-      var episodeLinks = extractEpisodeLinks(html, request.episode);
-      return episodeLinks.length > 0 ? episodeLinks : null;
-    }).then(function(links) {
-      if (!links || links.length === 0)
+    var searchUrl = buildSearchUrl(request);
+    return fetchText(fetchImpl, searchUrl, { headers: BROWSER_HEADERS }).then(function(html) {
+      if (!html)
         return [];
-      return fetchFirstResult(fetchImpl, links, { headers: BROWSER_HEADERS }, function(html) {
-        var embeds2 = extractVidUpEmbeds(html);
-        return embeds2.length > 0 ? embeds2 : null;
+      var episodeLinks = extractEpisodeLinks(html, request.episode);
+      if (episodeLinks.length === 0)
+        return [];
+      return fetchFirstResult(fetchImpl, episodeLinks, { headers: BROWSER_HEADERS }, function(epHtml) {
+        var searchEmbeds = extractDramavideoEmbeds(epHtml);
+        return searchEmbeds.length > 0 ? searchEmbeds : null;
       }).then(function(searchEmbeds) {
         if (!searchEmbeds)
           return [];
@@ -576,11 +596,11 @@ function getStreamsForRequest(request, options) {
     });
   }).then(function(resolved) {
     return dedupeStreams(resolved).map(function(stream) {
-      stream.name = "VidUp Desi";
+      stream.name = "DramaVideo Desi";
       return toNuvioStream(request, stream);
     });
   }).catch(function(error) {
-    console.log("[VidUp Desi] resolver failed: " + error.message);
+    console.log("[DramaVideo Desi] resolver failed: " + error.message);
     return [];
   });
 }
@@ -591,7 +611,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
   return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY }).then(function(request) {
     return getStreamsForRequest(request, { fetchImpl: typeof fetch !== "undefined" ? fetch : null });
   }).catch(function(error) {
-    console.log("[VidUp Desi] getStreams failed: " + error.message);
+    console.log("[DramaVideo Desi] getStreams failed: " + error.message);
     return [];
   });
 }

@@ -111,13 +111,14 @@ export function attrValues(markup, tags, attrs) {
   var tagPattern = new RegExp("<\\s*(" + tagAlternation + ")\\b[^>]*>", "gis");
   var attrPattern = new RegExp(
     "\\b(" + attrAlternation + ")\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
-    "i",
+    "gi",
   );
   var values = [];
   var tag;
   while ((tag = tagPattern.exec(String(markup || ""))) !== null) {
-    var attr = tag[0].match(attrPattern);
-    if (attr) {
+    var attr;
+    attrPattern.lastIndex = 0;
+    while ((attr = attrPattern.exec(tag[0])) !== null) {
       values.push(decodeText((attr[2] || attr[3] || attr[4] || "").trim()));
     }
   }
