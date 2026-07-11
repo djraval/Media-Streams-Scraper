@@ -32,15 +32,10 @@ var CHANNEL_SLUGS = {
   "starplus": ["star-plus"],
   "zee tv": ["zee-tv"]
 };
-var VKSPEED_HOSTS = ["vkspeed.com", "vkcdn5.com", "vkcdn6.com", "vkcdn7.com"];
-var VKPRIME_HOSTS = ["vkprime.com"];
 
 // src/lib/http.js
 function resolveFetch(options) {
   return options && options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
-}
-function browserHeaders(referer) {
-  return { headers: Object.assign({}, BROWSER_HEADERS, { Referer: referer }) };
 }
 function fetchText(fetchImpl, url, options) {
   return fetchImpl(url, options || {}).then(function(response) {
@@ -74,24 +69,6 @@ function fetchJson(fetchImpl, url) {
     return response.json();
   });
 }
-function fetchContentLength(fetchImpl, url, headers) {
-  return fetchImpl(url, { method: "GET", headers: Object.assign({}, headers || {}, { Range: "bytes=0-0" }) }).then(function(response) {
-    if (!response || response.ok === false)
-      return 0;
-    var cr = response.headers && response.headers.get("content-range") || "";
-    var match = cr.match(/\/(\d+)$/);
-    if (match) {
-      if (typeof response.arrayBuffer === "function") {
-        response.arrayBuffer().catch(function() {
-        });
-      }
-      return Number(match[1]);
-    }
-    return Number(response.headers && response.headers.get("content-length") || 0) || 0;
-  }).catch(function() {
-    return 0;
-  });
-}
 
 // src/lib/html.js
 function dedupe(values) {
@@ -121,19 +98,6 @@ function dedupeStreams(streams) {
   }
   return out;
 }
-function isPlaceholderUrl(url) {
-  var lower = String(url || "").toLowerCase();
-  return lower.indexOf("/ads/") !== -1 || lower.indexOf("127.0.0.1") !== -1;
-}
-function embedHostRegex(hosts, pathPattern) {
-  var escaped = hosts.map(function(h) {
-    return h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  });
-  return new RegExp(
-    "^https://(?:www\\.)?(?:" + escaped.join("|") + ")/" + pathPattern + "$",
-    "i"
-  );
-}
 function decodeText(raw) {
   var text = String(raw || "").replace(/&amp;/gi, "&").replace(/&#038;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
   var replacements = [
@@ -151,22 +115,6 @@ function decodeText(raw) {
     text = text.replace(replacements[i][0], replacements[i][1]);
   }
   return text.replace(/&amp;/gi, "&").replace(/&#038;/gi, "&");
-}
-function mediaCandidates(raw, extension) {
-  var text = decodeText(raw);
-  var pattern = new RegExp(
-    `https?://[^\\s'\\"<>\\\\,}\\]]+\\.` + extension.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + `(?:\\?[^\\s'\\"<>\\\\}\\]]*)?`,
-    "gi"
-  );
-  var matches = [];
-  var m;
-  while ((m = pattern.exec(text)) !== null) {
-    matches.push(m[0].replace(/[.;)]+$/g, ""));
-  }
-  return dedupe(matches);
-}
-function mp4Candidates(raw) {
-  return mediaCandidates(raw, "mp4");
 }
 function attrValues(markup, tags, attrs) {
   var tagAlternation = tags.join("|");
@@ -186,9 +134,6 @@ function attrValues(markup, tags, attrs) {
     }
   }
   return dedupe(values);
-}
-function links(markup) {
-  return attrValues(markup, ["a", "link", "area"], ["href"]);
 }
 function iframeSrcCandidates(markup) {
   return dedupe(
@@ -320,103 +265,6 @@ function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
   return Promise.reject(new Error("Unsupported media type: " + mediaType));
 }
 
-// src/lib/packer.js
-function packerEncode(n, base) {
-  if (n === 0)
-    return "0";
-  var out = "";
-  var value = n;
-  while (value > 0) {
-    var r = value % base;
-    if (r < 10) {
-      out = String.fromCharCode(48 + r) + out;
-    } else if (r < 36) {
-      out = String.fromCharCode(87 + r) + out;
-    } else {
-      out = String.fromCharCode(29 + r) + out;
-    }
-    value = Math.floor(value / base);
-  }
-  return out;
-}
-function unpack(blob) {
-  var match = String(blob || "").match(
-    /eval\(function\(p,a,c,k,e,(?:d|r)\).*?\}\s*\(\s*'(.*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'(.*?)'\.split\('\|'\)/s
-  );
-  if (!match)
-    return "";
-  var out = match[1].replace(/\\'/g, "'");
-  var base = Number(match[2]);
-  var count = Number(match[3]);
-  var keys = match[4].replace(/\\'/g, "'").split("|");
-  for (var i = count - 1; i >= 0; i -= 1) {
-    if (!keys[i])
-      continue;
-    var token = packerEncode(i, base).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp("\\b" + token + "\\b", "g"), keys[i]);
-  }
-  return out;
-}
-
-// src/lib/vkplayer.js
-function qualityNearUrl(text, url) {
-  var index = text.indexOf(url);
-  if (index === -1)
-    return 0;
-  var before = text.substring(Math.max(0, index - 80), index);
-  var after = text.substring(index, index + 120);
-  var matches = (before + after).match(/(\d{3,4})p?/gi) || [];
-  if (matches.length === 0)
-    return 0;
-  return Number(matches[matches.length - 1]);
-}
-function jwPlayerSourceQualities(raw) {
-  var text = decodeText(raw);
-  var map = /* @__PURE__ */ new Map();
-  var re = /\{\s*(?:file|src)\s*:\s*["']([^"']+)["']\s*,\s*(?:label|quality|res)\s*:\s*["']?(\d{3,4})p?["']?\s*[^}]*\}/gi;
-  var m;
-  while ((m = re.exec(text)) !== null) {
-    map.set(m[1], Number(m[2]));
-  }
-  var re2 = /\{\s*(?:label|quality|res)\s*:\s*["']?(\d{3,4})p?["']?\s*,\s*(?:file|src)\s*:\s*["']([^"']+)["']\s*[^}]*\}/gi;
-  while ((m = re2.exec(text)) !== null) {
-    if (!map.has(m[2])) {
-      map.set(m[2], Number(m[1]));
-    }
-  }
-  return map;
-}
-function rankedMp4Candidates(raw) {
-  var text = decodeText(raw);
-  var jwMap = jwPlayerSourceQualities(raw);
-  return mp4Candidates(text).map(function(url) {
-    return { url, quality: jwMap.get(url) || qualityNearUrl(text, url) || 0 };
-  }).sort(function(a, b) {
-    return b.quality - a.quality;
-  });
-}
-function resolveVkPlayer(embedUrl, refererUrl, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  return fetchText(fetchImpl, embedUrl, browserHeaders(refererUrl)).then(function(playerHtml) {
-    if (!playerHtml)
-      return [];
-    var decoded = unpack(playerHtml);
-    var payload = [playerHtml, decoded].filter(Boolean).join("\n");
-    var sources = rankedMp4Candidates(payload);
-    return sources.map(function(src) {
-      return {
-        url: src.url,
-        quality: "unknown",
-        kind: "mp4",
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
-      };
-    });
-  }).catch(function() {
-    return [];
-  });
-}
-
 // src/lib/format.js
 function formatBytes(bytes) {
   var value = Number(bytes);
@@ -507,186 +355,252 @@ function toNuvioStream(request, stream) {
   };
 }
 
-// src/desiruleztv-net/index.js
-var SITE_BASE = "https://desiruleztv.net";
-var SEARCH_PATH = "/?s=";
-var CATEGORY_PATH = "/category/";
-var ARCHIVE_PAGE_PATH = "/page/";
-var DESIRULEZ_HOST_RE = new RegExp(
-  "^https://(?:www\\.)?desiruleztv\\.net/",
-  "i"
-);
-var VKPRIME_RE = embedHostRegex(VKPRIME_HOSTS, "embed-[A-Za-z0-9-]+\\.html");
-var VKSPEED_RE = embedHostRegex(VKSPEED_HOSTS, "embed-[A-Za-z0-9-]+\\.html");
-function displayBackend2(backend) {
-  return String(backend || "source").replace(/(^|[-_\s]+)([a-z])/g, function(_match, prefix, ch) {
-    return prefix + ch.toUpperCase();
-  }).replace(/[-_]+/g, "");
-}
-function normalizeIframeUrl(src) {
-  var url = String(src || "").trim();
-  if (url.startsWith("//")) {
-    return "https:" + url;
+// src/lib/filemoon.js
+function base64UrlToBytes(str) {
+  var input = String(str || "").replace(/-/g, "+").replace(/_/g, "/");
+  var pad = input.length % 4;
+  if (pad)
+    input += "====".substring(0, 4 - pad);
+  var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var output = [];
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < input.length; i++) {
+    var ch = input.charAt(i);
+    if (ch === "=")
+      break;
+    var idx = chars.indexOf(ch);
+    if (idx === -1)
+      continue;
+    buffer = buffer << 6 | idx;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output.push(buffer >> bits & 255);
+    }
   }
-  return url;
+  return new Uint8Array(output);
 }
-function findPlayerIframes(markup) {
-  return dedupe(
-    iframeSrcCandidates(markup).map(normalizeIframeUrl).filter(function(href) {
-      return VKPRIME_RE.test(href) || VKSPEED_RE.test(href);
-    })
-  );
-}
-function buildSearchUrls(request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
+function bytesToString(bytes) {
+  var arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  var str = "";
+  var chunk = 32768;
+  for (var i = 0; i < arr.length; i += chunk) {
+    str += String.fromCharCode.apply(null, arr.subarray(i, Math.min(i + chunk, arr.length)));
   }
-  var dateQuery = dateSlug.replace(/-/g, " ");
-  return (request.slugCandidates || []).slice(0, 2).map(function(slug) {
-    return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
+  return str;
+}
+
+// src/lib/dramavideo.js
+var DRAMAVIDEO_WATCH_RE = /dramavideo\.se\/watch\?v=(\d+)/i;
+var PLAYER_HOST = "https://player.dramavideo.se/";
+var PLAYER_REFERER = "https://dramavideo.se/";
+function isDramavideoUrl(url) {
+  return DRAMAVIDEO_WATCH_RE.test(String(url || ""));
+}
+function extractWatchId(url) {
+  var match = String(url || "").match(DRAMAVIDEO_WATCH_RE);
+  return match ? match[1] : "";
+}
+function extractServerAttrs(html) {
+  var text = String(html || "");
+  var liMatch = text.match(/<li[^>]*class="linkserver"[^>]*>/i);
+  if (!liMatch)
+    return null;
+  var liTag = liMatch[0];
+  var videoMatch = liTag.match(/data-video="([^"]+)"/);
+  var providerMatch = liTag.match(/data-provider="([^"]+)"/);
+  if (!videoMatch || !providerMatch)
+    return null;
+  return { videoId: videoMatch[1], provider: providerMatch[1] };
+}
+function hexToBytes(hex) {
+  var str = String(hex || "");
+  var bytes = [];
+  for (var i = 0; i < str.length; i += 2) {
+    bytes.push(parseInt(str.substr(i, 2), 16));
+  }
+  return new Uint8Array(bytes);
+}
+function base64ToBytes(b64) {
+  var b64url = String(b64 || "").replace(/\+/g, "-").replace(/\//g, "_");
+  return base64UrlToBytes(b64url);
+}
+function aesCbcDecryptSubtle(encDataBase64, keyHex, ivHex) {
+  var subtle = typeof crypto !== "undefined" && crypto.subtle || typeof globalThis !== "undefined" && globalThis.crypto && globalThis.crypto.subtle;
+  if (!subtle)
+    return Promise.reject(new Error("crypto.subtle not available"));
+  var keyBytes = hexToBytes(keyHex);
+  var ivBytes = hexToBytes(ivHex);
+  var ctBytes = base64ToBytes(encDataBase64);
+  return subtle.importKey("raw", keyBytes, { name: "AES-CBC" }, false, ["decrypt"]).then(function(key) {
+    return subtle.decrypt({ name: "AES-CBC", iv: ivBytes }, key, ctBytes);
+  }).then(function(decrypted) {
+    return bytesToString(new Uint8Array(decrypted));
   });
 }
-function buildArchiveUrls(request) {
+function aesCbcDecryptCryptoJS(encDataBase64, keyHex, ivHex) {
+  var CryptoJS = typeof require === "function" ? require("crypto-js") : null;
+  if (!CryptoJS)
+    return Promise.reject(new Error("crypto-js not available"));
+  var key = CryptoJS.enc.Hex.parse(keyHex);
+  var iv = CryptoJS.enc.Hex.parse(ivHex);
+  var cipherParams = CryptoJS.lib.CipherParams.create({
+    ciphertext: CryptoJS.enc.Base64.parse(encDataBase64)
+  });
+  var decrypted = CryptoJS.AES.decrypt(cipherParams, key, {
+    iv,
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7
+  });
+  return Promise.resolve(decrypted.toString(CryptoJS.enc.Utf8));
+}
+function aesCbcDecrypt(encDataBase64, keyHex, ivHex) {
+  return aesCbcDecryptSubtle(encDataBase64, keyHex, ivHex).catch(function() {
+    return aesCbcDecryptCryptoJS(encDataBase64, keyHex, ivHex);
+  });
+}
+function parseDecryptedSources(html) {
+  var text = String(html || "");
+  var match = text.match(/JSON\.parse\(`(\[[^\]]+\])`\)/);
+  if (!match)
+    return [];
+  try {
+    return JSON.parse(match[1]);
+  } catch (e) {
+    return [];
+  }
+}
+function decryptPlayerPage(fetchImpl, videoId, provider) {
+  var playerUrl = PLAYER_HOST + "?id=" + videoId + "&sv=" + provider;
+  var headers = Object.assign({}, BROWSER_HEADERS, { Referer: PLAYER_REFERER });
+  return fetchText(fetchImpl, playerUrl, { headers }).then(function(html) {
+    if (!html)
+      return null;
+    var encMatch = html.match(/encData="([^"]+)"/);
+    var keyMatch = html.match(/keyHex="([^"]+)"/);
+    var ivMatch = html.match(/ivHex="([^"]+)"/);
+    if (!encMatch || !keyMatch || !ivMatch)
+      return null;
+    return aesCbcDecrypt(encMatch[1], keyMatch[1], ivMatch[1]);
+  });
+}
+function resolveDramavideoEmbed(fetchImpl, watchUrl) {
+  var watchId = extractWatchId(watchUrl);
+  if (!watchId)
+    return Promise.resolve([]);
+  return fetchText(fetchImpl, watchUrl, { headers: BROWSER_HEADERS }).then(function(html) {
+    if (!html)
+      return [];
+    var attrs = extractServerAttrs(html);
+    if (!attrs)
+      return [];
+    return decryptPlayerPage(fetchImpl, attrs.videoId, attrs.provider);
+  }).then(function(decryptedHtml) {
+    if (!decryptedHtml)
+      return [];
+    var sources = parseDecryptedSources(decryptedHtml);
+    return sources.filter(function(s) {
+      return s.file && s.type === "hls";
+    }).map(function(s) {
+      var qualityMatch = (s.label || "").match(/(\d{3,4})p?/i);
+      var quality = qualityMatch ? qualityMatch[1] + "p" : "720p";
+      return {
+        url: s.file,
+        quality,
+        name: "DramaVideo",
+        kind: "hls",
+        sourceTag: "dramavideo",
+        headers: { Referer: PLAYER_HOST }
+      };
+    });
+  }).catch(function() {
+    return [];
+  });
+}
+
+// src/dramavideo-desi/index.js
+var SITE_BASE = "https://yehrishtakiakehlatahai.com";
+var EPISODE_PATTERN = "/{slug}-{date}-episode-{num}-video/";
+var SEARCH_PATH = "/?s=";
+function buildEpisodeUrls(request) {
+  var dateSlug = episodeDateSlug(request.airDate);
+  if (!dateSlug)
+    return [];
   var urls = [];
-  var slugs = (request.slugCandidates || []).slice(0, 2);
-  for (var i = 0; i < slugs.length; i += 1) {
-    urls.push(SITE_BASE + CATEGORY_PATH + slugs[i] + "/");
-    urls.push(SITE_BASE + CATEGORY_PATH + slugs[i] + ARCHIVE_PAGE_PATH + "2/");
-    urls.push(SITE_BASE + CATEGORY_PATH + slugs[i] + ARCHIVE_PAGE_PATH + "3/");
+  for (var i = 0; i < request.slugCandidates.length; i++) {
+    var path = EPISODE_PATTERN.replace("{slug}", request.slugCandidates[i]).replace("{date}", dateSlug).replace("{num}", request.episode);
+    urls.push(SITE_BASE + path);
+  }
+  return urls;
+}
+function buildSearchUrl(request) {
+  var query = encodeURIComponent(request.title + " episode " + request.episode);
+  return SITE_BASE + SEARCH_PATH + query;
+}
+function extractDramavideoEmbeds(html) {
+  var candidates = iframeSrcCandidates(html);
+  return dedupe(candidates.filter(isDramavideoUrl));
+}
+function extractEpisodeLinks(html, episodeNum) {
+  var linkRe = /href="(https?:\/\/yehrishtakiakehlatahai\.com\/[^"]*episode[^"]*)"/gi;
+  var match;
+  var urls = [];
+  while ((match = linkRe.exec(String(html || ""))) !== null) {
+    var url = match[1];
+    if (url.match(new RegExp("episode-" + episodeNum + "\\b"))) {
+      urls.push(url);
+    }
   }
   return dedupe(urls);
 }
-function episodePageCandidates(markup, request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
-  return dedupe(
-    links(markup).filter(function(href) {
-      if (!DESIRULEZ_HOST_RE.test(href)) {
-        return false;
-      }
-      if (href.includes("/category/")) {
-        return false;
-      }
-      if (!href.toLowerCase().includes(dateSlug)) {
-        return false;
-      }
-      return (request.slugCandidates || []).some(function(slug) {
-        return href.toLowerCase().includes(slug);
-      });
-    })
-  );
-}
-function resolveFromEpisodeUrls(fetchImpl, episodeUrls) {
-  if (episodeUrls.length === 0) {
-    return Promise.resolve([]);
-  }
-  return Promise.all(
-    episodeUrls.map(function(url) {
-      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS }).catch(function(e) {
-        console.log("[DesiRulezTV.net] episode page fetch failed for " + url + ": " + (e && e.message));
-        return null;
-      });
-    })
-  ).then(function(episodePages) {
-    var allIframeUrls = dedupe(
-      episodePages.flatMap(function(page) {
-        return page ? findPlayerIframes(page) : [];
-      })
-    );
-    if (allIframeUrls.length === 0) {
-      return [];
+function resolveAllEmbeds(fetchImpl, embeds) {
+  return Promise.all(embeds.map(function(embedUrl) {
+    return resolveDramavideoEmbed(fetchImpl, embedUrl);
+  })).then(function(results) {
+    var all = [];
+    for (var i = 0; i < results.length; i++) {
+      all = all.concat(results[i]);
     }
-    return Promise.all(
-      allIframeUrls.map(function(iframeUrl) {
-        var backend = iframeUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime";
-        return resolveVkPlayer(iframeUrl, SITE_BASE + "/", { fetchImpl }).then(function(sources) {
-          var real = (sources || []).filter(function(s) {
-            return !isPlaceholderUrl(s.url);
-          });
-          if (real.length === 0) {
-            return null;
-          }
-          var best = real[0];
-          var stream = {
-            backend,
-            kind: "mp4",
-            quality: best.quality || "unknown",
-            url: best.url,
-            size: "",
-            sizeBytes: 0,
-            duration: 0,
-            sourceTag: "",
-            headers: best.headers
-          };
-          return fetchContentLength(fetchImpl, best.url, best.headers).then(function(sizeBytes) {
-            stream.size = formatBytes(sizeBytes);
-            stream.sizeBytes = sizeBytes;
-            return stream;
-          });
-        }).catch(function(e) {
-          console.log("[DesiRulezTV.net] player resolution failed for " + iframeUrl + ": " + (e && e.message));
-          return null;
-        });
-      })
-    ).then(function(resolved) {
-      return dedupeStreams(resolved);
-    });
+    return all;
   });
-}
-function processArchive(fetchImpl, archiveUrls, request, index) {
-  if (index >= archiveUrls.length) {
-    return Promise.resolve([]);
-  }
-  return fetchText(fetchImpl, archiveUrls[index], { headers: BROWSER_HEADERS }).then(function(archive) {
-    if (!archive) {
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    }
-    var episodeUrls = episodePageCandidates(archive, request);
-    if (episodeUrls.length === 0) {
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    }
-    return resolveFromEpisodeUrls(fetchImpl, episodeUrls).then(function(streams) {
-      if (streams.length > 0) {
-        return streams;
-      }
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    });
-  });
-}
-function resolveDesiRulezTV(request, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  var searchUrls = buildSearchUrls(request);
-  var archiveUrls = buildArchiveUrls(request);
-  if (searchUrls.length > 0) {
-    return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function(page) {
-      var episodeUrls = episodePageCandidates(page, request);
-      return episodeUrls.length > 0 ? episodeUrls : null;
-    }).then(function(episodeUrls) {
-      if (episodeUrls) {
-        return resolveFromEpisodeUrls(fetchImpl, episodeUrls);
-      }
-      return processArchive(fetchImpl, archiveUrls, request, 0);
-    });
-  }
-  return processArchive(fetchImpl, archiveUrls, request, 0);
 }
 function getStreamsForRequest(request, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  return resolveDesiRulezTV(request, { fetchImpl }).then(function(resolved) {
+  var urls = buildEpisodeUrls(request);
+  return fetchFirstResult(fetchImpl, urls, { headers: BROWSER_HEADERS }, function(html) {
+    var embeds = extractDramavideoEmbeds(html);
+    if (embeds.length === 0)
+      return null;
+    return embeds;
+  }).then(function(embeds) {
+    if (embeds) {
+      return resolveAllEmbeds(fetchImpl, embeds);
+    }
+    var searchUrl = buildSearchUrl(request);
+    return fetchText(fetchImpl, searchUrl, { headers: BROWSER_HEADERS }).then(function(html) {
+      if (!html)
+        return [];
+      var episodeLinks = extractEpisodeLinks(html, request.episode);
+      if (episodeLinks.length === 0)
+        return [];
+      return fetchFirstResult(fetchImpl, episodeLinks, { headers: BROWSER_HEADERS }, function(epHtml) {
+        var searchEmbeds = extractDramavideoEmbeds(epHtml);
+        return searchEmbeds.length > 0 ? searchEmbeds : null;
+      }).then(function(searchEmbeds) {
+        if (!searchEmbeds)
+          return [];
+        return resolveAllEmbeds(fetchImpl, searchEmbeds);
+      });
+    });
+  }).then(function(resolved) {
     return dedupeStreams(resolved).map(function(stream) {
-      stream.name = "DesiRulezTV.net " + displayBackend2(stream.backend);
-      if (stream.sourceTag) {
-        stream.name += " (" + stream.sourceTag + ")";
-      }
+      stream.name = "DramaVideo Desi";
       return toNuvioStream(request, stream);
     });
   }).catch(function(error) {
-    console.log("[DesiRulezTV.net] resolver failed: " + error.message);
+    console.log("[DramaVideo Desi] resolver failed: " + error.message);
     return [];
   });
 }
@@ -697,7 +611,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
   return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY }).then(function(request) {
     return getStreamsForRequest(request, { fetchImpl: typeof fetch !== "undefined" ? fetch : null });
   }).catch(function(error) {
-    console.log("[DesiRulezTV.net] getStreams failed: " + error.message);
+    console.log("[DramaVideo Desi] getStreams failed: " + error.message);
     return [];
   });
 }

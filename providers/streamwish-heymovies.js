@@ -148,7 +148,11 @@ function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
       return fetchJson(
         fetchImpl,
         tmdbUrl("/tv/" + tmdbId + "/season/" + season + "/episode/" + episode, tmdbApiKey)
-      );
+      ).then(function(ep) {
+        return ep;
+      }, function() {
+        return { air_date: "", name: "", runtime: 0 };
+      });
     }).then(function(ep) {
       var title = tvInfo.name || tvInfo.original_name || "";
       var networkCandidates = channelSlugCandidates(

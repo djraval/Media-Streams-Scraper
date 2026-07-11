@@ -1,6 +1,6 @@
 {
   "name": "desi-serials-repo",
-  "version": "2.7.1",
+  "version": "2.8.0",
   "description": "Nuvio custom providers for Indian TV serials and movies",
   "scripts": {
     "build": "node build.js",
@@ -12,5 +12,9 @@
   "devDependencies": {
     "esbuild": "^0.20.0"
   },
-  "license": "GPL-3.0"
+  "license": "GPL-3.0",
+  "dependencies": {
+    "crypto-js": "^4.2.0",
+    "playwright": "^1.61.1"
+  }
 }
