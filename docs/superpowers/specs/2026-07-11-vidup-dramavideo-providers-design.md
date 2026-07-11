@@ -5,6 +5,14 @@
 video host resolvers — vidup.site (Blogger video) and dramavideo.se (AES-CBC
 encrypted HLS).
 
+**OUTCOME (2026-07-11):** dramavideo-desi was implemented and verified working
+(ffprobe: H.264 1280x720 + AAC, ~24min). vidup-desi was implemented but
+**removed** — googlevideo.com URLs return 403 Forbidden for all non-browser HTTP
+clients due to TLS fingerprinting. The video plays in Chromium (HTTP 206) but
+fails in curl, ffmpeg, and likely ExoPlayer/KSPlayer. Returning the embed URL
+doesn't work either — Nuvio requires direct video URLs, not HTML pages. See
+AGENTS.md #14 for full details.
+
 ---
 
 ## Problem statement

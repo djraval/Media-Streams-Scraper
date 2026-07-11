@@ -115,22 +115,6 @@
       "supportsExternalPlayer": true
     },
     {
-      "id": "vidup-desi",
-      "name": "VidUp Desi",
-      "description": "Indian TV serial resolver using yodesionline.net and desiserialonline.su with vidup.site (Blogger video) player. Resolves googlevideo MP4 URLs via Blogger batchexecute API.",
-      "version": "2.8.0",
-      "author": "djraval",
-      "supportedTypes": ["tv"],
-      "filename": "providers/vidup-desi.js?v=2.8.0",
-      "enabled": true,
-      "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["mp4"],
-      "limited": true,
-      "disabledPlatforms": [],
-      "supportsExternalPlayer": true
-    },
-    {
       "id": "dramavideo-desi",
       "name": "DramaVideo Desi",
       "description": "Indian TV serial resolver using yehrishtakiakehlatahai.com with dramavideo.se player. Decrypts AES-CBC encrypted player page to extract HLS stream URLs.",

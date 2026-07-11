@@ -9,7 +9,6 @@ var providers = {
   'streamtape-desi': require('./providers/streamtape-desi.js'),
   'filemoon-movieswatch': require('./providers/filemoon-movieswatch.js'),
   'streamwish-heymovies': require('./providers/streamwish-heymovies.js'),
-  'vidup-desi': require('./providers/vidup-desi.js'),
   'dramavideo-desi': require('./providers/dramavideo-desi.js'),
 };
 
@@ -42,7 +41,7 @@ var movieContent = [
   { id: '872906', name: 'Jawan' },
 ];
 
-var tvProviders = ['desi-serials-to', 'desitvserials-se', 'desiruleztv-net', 'mixdrop-desi', 'streamtape-desi', 'vidup-desi', 'dramavideo-desi'];
+var tvProviders = ['desi-serials-to', 'desitvserials-se', 'desiruleztv-net', 'mixdrop-desi', 'streamtape-desi', 'dramavideo-desi'];
 var movieProviders = ['mixdrop-desi', 'streamtape-desi', 'filemoon-movieswatch'];
 
 var TIMEOUT = 45000;
