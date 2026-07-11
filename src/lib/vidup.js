@@ -2,8 +2,9 @@
 // Flow:
 // 1. Fetch vidup.site/play?cd=... page
 // 2. Extract Blogger token from blogger.com/video.g?token=... iframe
-// 3. POST to Blogger batchexecute API (RPC ID: WcwnYd)
-// 4. Parse response for googlevideo MP4 URLs (itag 18=360p, 22=720p)
+// 3. Fetch blogger.com/video.g?token=... page → extract f.sid + bl session params
+// 4. POST to Blogger batchexecute API (RPC ID: WcwnYd) with session params
+// 5. Parse response for googlevideo MP4 URLs (itag 18=360p, 22=720p)
 //
 // googlevideo URLs are IP-bound (same as Flow HLS) — no server-side probing.
 
@@ -11,7 +12,8 @@ import { UA, BROWSER_HEADERS } from "./constants.js";
 import { fetchText } from "./http.js";
 
 var VIDUP_HOSTS = ["vidup.site"];
-var BLOGGER_BATCH_URL = "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute";
+var BLOGGER_VIDEO_PAGE = "https://www.blogger.com/video.g?token=";
+var BLOGGER_BATCH_BASE = "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute";
 var BLOGGER_RPC_ID = "WcwnYd";
 
 // Itag → quality mapping for Blogger/googlevideo streams.
@@ -36,19 +38,43 @@ function extractBloggerToken(html) {
   return match ? match[1] : "";
 }
 
+// Extract session parameters from the Blogger video.g page HTML.
+// The page contains "FdrFJe":"<formSessionId>" and "cfb2h":"<blogId>".
+function extractBloggerSession(html) {
+  var text = String(html || "");
+  var sidMatch = text.match(/"FdrFJe":"([^"]+)"/);
+  var blMatch = text.match(/"cfb2h":"([^"]+)"/);
+  return {
+    formSessionId: sidMatch ? sidMatch[1] : "",
+    blogId: blMatch ? blMatch[1] : "",
+  };
+}
+
 // Call the Blogger batchexecute API and return the raw response text.
-// The API returns a response prefixed with )]}' XSS guard, then the JSON payload.
-function bloggerBatchExecute(fetchImpl, token) {
-  // Body: f.req=[[["WcwnYd","[\"TOKEN\"]",null,"generic"]]]
-  var innerParam = '["' + token + '"]';
-  var reqPayload = JSON.stringify([[BLOGGER_RPC_ID, innerParam, null, "generic"]]);
+// Requires the form session ID and blog ID extracted from the video.g page.
+function bloggerBatchExecute(fetchImpl, token, session) {
+  // Build URL with required query parameters.
+  var reqid = String((Date.now() / 1000) % 86400 | 0);
+  var url =
+    BLOGGER_BATCH_BASE +
+    "?rpcids=" + BLOGGER_RPC_ID +
+    "&source-path=%2Fvideo.g" +
+    "&f.sid=" + encodeURIComponent(session.formSessionId) +
+    "&bl=" + encodeURIComponent(session.blogId) +
+    "&hl=en-US&_reqid=" + reqid + "&rt=c";
+
+  // Body: f.req=[[["WcwnYd","[\"TOKEN\",\"\",0]",null,"generic"]]]
+  // The inner RPC parameter is a JSON array: ["token", "", 0]
+  // Note: three levels of array nesting — [[["WcwnYd",...]]]
+  var innerParam = '["' + token + '","",0]';
+  var reqPayload = JSON.stringify([[[BLOGGER_RPC_ID, innerParam, null, "generic"]]]);
   var body = "f.req=" + encodeURIComponent(reqPayload);
 
-  return fetchImpl(BLOGGER_BATCH_URL, {
+  return fetchImpl(url, {
     method: "POST",
     headers: Object.assign({}, BROWSER_HEADERS, {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Referer": "https://www.blogger.com/video.g",
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "Referer": "https://www.blogger.com/",
       "X-Same-Domain": "1",
     }),
     body: body,
@@ -66,7 +92,10 @@ function parseBloggerVideoUrls(responseText) {
   var text = String(responseText || "");
   if (!text) return [];
 
-  // Decode \u003d → =, \u0026 → & etc.
+  // Decode \\u003d → =, \\u0026 → & etc. (response uses double-escaped JSON)
+  text = text.replace(/\\\\u003d/g, "=").replace(/\\\\u0026/g, "&");
+  text = text.replace(/\\\\u003f/g, "?").replace(/\\\\u002f/g, "/");
+  // Also handle single-backslash variants for robustness
   text = text.replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
   text = text.replace(/\\u003f/g, "?").replace(/\\u002f/g, "/");
 
@@ -102,17 +131,27 @@ export function resolveVidUpEmbed(fetchImpl, vidupUrl) {
   // Step 1: Fetch vidup.site page to get Blogger token
   return fetchText(fetchImpl, vidupUrl, { headers: BROWSER_HEADERS })
     .then(function (html) {
-      if (!html) return [];
+      if (!html) return { token: "", session: null };
       var token = extractBloggerToken(html);
-      if (!token) return [];
+      if (!token) return { token: "", session: null };
 
-      // Step 2: Call batchexecute API
-      return bloggerBatchExecute(fetchImpl, token);
+      // Step 2: Fetch blogger.com/video.g page to get session params
+      return fetchText(fetchImpl, BLOGGER_VIDEO_PAGE + token, { headers: BROWSER_HEADERS })
+        .then(function (bloggerHtml) {
+          if (!bloggerHtml) return { token: token, session: null };
+          return { token: token, session: extractBloggerSession(bloggerHtml) };
+        });
+    })
+    .then(function (result) {
+      if (!result.token || !result.session || !result.session.formSessionId) return [];
+
+      // Step 3: Call batchexecute API with session params
+      return bloggerBatchExecute(fetchImpl, result.token, result.session);
     })
     .then(function (responseText) {
       if (!responseText) return [];
 
-      // Step 3: Parse response for googlevideo URLs
+      // Step 4: Parse response for googlevideo URLs
       var urls = parseBloggerVideoUrls(responseText);
       return urls.map(function (item) {
         return {
