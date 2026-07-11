@@ -14,7 +14,7 @@ var FILEMOON_HOSTS = [
 ];
 
 // Base64url → bytes (no Buffer/atob in Nuvio sandbox).
-function base64UrlToBytes(str) {
+export function base64UrlToBytes(str) {
   var input = String(str || "").replace(/-/g, "+").replace(/_/g, "/");
   // Pad to multiple of 4
   var pad = input.length % 4;
@@ -41,7 +41,7 @@ function base64UrlToBytes(str) {
 }
 
 // Uint8Array → string (no TextDecoder in Nuvio sandbox).
-function bytesToString(bytes) {
+export function bytesToString(bytes) {
   var arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   var str = "";
   var chunk = 0x8000;
@@ -52,7 +52,7 @@ function bytesToString(bytes) {
 }
 
 // Concatenate two Uint8Arrays.
-function concatBytes(a, b) {
+export function concatBytes(a, b) {
   var result = new Uint8Array(a.length + b.length);
   result.set(a, 0);
   result.set(b, a.length);
