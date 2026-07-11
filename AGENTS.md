@@ -159,16 +159,15 @@ node build.js --watch    # Watch mode (rebuild on change)
 - **Embed URL format**: `https://filemoon.sx/e/{code}` or `https://filemoon.to/e/{code}`
 - **Domains**: filemoon.to, filemoon.sx, filemoon.in, filemoon.link, filemoon.nl, filemoon.wf, cinegrab.com, filemoon.eu, filemoon.art, moonmov.pro
 
-### StreamWish (streamwish-heymovies — TV + movies)
-- **Source site**: heymovies.cyou (redirects from heymovies.live; WordPress + Cloudflare, no JS challenge)
+### StreamWish (streamwish-heymovies — DISABLED, source site migrated)
+- **Source site**: heymovies.cyou has **fully migrated away from StreamWish** — now uses vidsrc.to, peachify.top, 111movies.net, 2embed.stream. Provider disabled in manifest.json.
+- **Resolver (src/lib/streamwish.js) still works** — verified with direct StreamWish URLs. Needs a new source site that still uses StreamWish embeds to be re-enabled.
 - **No encryption** — only JS obfuscation (javascript-obfuscator with RC4 string array in main.js)
 - **Flow**: embed page (shell with main.js) → mirror server redirect → player page → Dean Edwards P.A.C.K.E.R. → unpack → regex m3u8
 - **main.js**: Contains RC4-obfuscated server lists (dmca/main/rules arrays). Server lists can be hardcoded.
 - **Mirror servers**: dmca = [hgplaycdn.com, hglamioz.com, niramirus.com, playnixes.com, medixiru.com], main = [hanerix.com, audinifer.com, vibuxer.com, masukestin.com]
 - **Player page**: Uses P.A.C.K.E.R. (radix 36) — unpacked JS has `links` object with `hls2`/`hls3`/`hls4` keys containing m3u8 URLs
 - **m3u8 extraction**: Regex `"hls[234]"\s*:\s*"([^"]*)"` or `https?://[^"'\s]+\.m3u8[^"'\s]*` after unpacking
-- **heymovies stream endpoint**: `https://heymovies.cyou/stream?v={post_id}` → `<li class="linkserver" data-video="{url}">` with all embed URLs
-- **IMPORTANT**: Labels on heymovies are unreliable — check URL domain, not label text
 - **StreamWish domains**: streamwish.com, streamwish.to, strwish.com, awish.pro, embedwish.com, swhoi.com, hgcloud.to, hglink.to, mwish.pro, dwish.pro, etc.
 - **TS segments**: Have fake 8-byte PNG headers (player-side concern, not provider)
 
@@ -301,9 +300,13 @@ ffprobe -user_agent "Mozilla/5.0 ..." -headers "Referer: ...\r\n" -v error -show
 
 9. **StreamWish uses NO encryption** — only JS obfuscation (javascript-obfuscator RC4 string array in main.js). The m3u8 URL is in the P.A.C.K.E.R.-encoded player page on mirror servers, not in main.js. Extracted by unpacking P.A.C.K.E.R. and regex-matching `"hls[234]":"..."`.
 
-10. **Nuvio docs say "Hermes" but the actual engine is QuickJS** (via quickjs-kt). Don't trust the docs — check the source code.
+10. **heymovies.cyou migrated away from StreamWish** — the site now uses vidsrc.to, peachify.top, 111movies.net, 2embed.stream. The streamwish-heymovies provider is disabled. The StreamWish resolver itself still works and can be reused with a new source site.
 
-11. **Local Node.js tests can pass while in-app fails** — always test in the Nuvio Plugin Tester (debug builds only) before shipping.
+11. **JuicyCodes (Flow/tvlogy.to) BANDWIDTH is 1000x too high** — the HLS master playlist reports BANDWIDTH=448265000 (448 Mbps) instead of 448265 (0.45 Mbps). A sanity check in parseHlsMasterPlaylist() divides by 1000 when BANDWIDTH > 100 Mbps.
+
+12. **Nuvio docs say "Hermes" but the actual engine is QuickJS** (via quickjs-kt). Don't trust the docs — check the source code.
+
+13. **Local Node.js tests can pass while in-app fails** — always test in the Nuvio Plugin Tester (debug builds only) before shipping.
 
 ## Reference Repositories
 

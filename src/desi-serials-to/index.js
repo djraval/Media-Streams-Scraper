@@ -206,6 +206,14 @@ function parseHlsMasterPlaylist(raw, baseUrl) {
       // Prefer AVERAGE-BANDWIDTH for size estimation (closer to actual bytes);
       // fall back to BANDWIDTH (peak) if not present.
       var bandwidth = avgBwMatch ? Number(avgBwMatch[1]) : bwMatch ? Number(bwMatch[1]) : 0;
+      // JuicyCodes (Flow/tvlogy.to) packager reports BANDWIDTH 1000x too high
+      // (e.g. 448265000 instead of 448265 bps). No web stream exceeds ~50 Mbps,
+      // so anything above 100 Mbps is this bug — divide by 1000 to recover the
+      // real value. If still absurd after correction, discard entirely.
+      if (bandwidth > 100000000) {
+        bandwidth = Math.round(bandwidth / 1000);
+        if (bandwidth > 100000000) bandwidth = 0;
+      }
       var urlLine = nextUriLine(lines, i + 1);
       if (urlLine) {
         variants.push({

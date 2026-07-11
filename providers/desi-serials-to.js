@@ -701,6 +701,11 @@ function parseHlsMasterPlaylist(raw, baseUrl) {
       var bwMatch = line.match(/BANDWIDTH=(\d+)/i);
       var height = resMatch ? Number(resMatch[1]) : 0;
       var bandwidth = avgBwMatch ? Number(avgBwMatch[1]) : bwMatch ? Number(bwMatch[1]) : 0;
+      if (bandwidth > 1e8) {
+        bandwidth = Math.round(bandwidth / 1e3);
+        if (bandwidth > 1e8)
+          bandwidth = 0;
+      }
       var urlLine = nextUriLine(lines, i + 1);
       if (urlLine) {
         variants.push({
