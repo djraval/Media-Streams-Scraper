@@ -139,6 +139,7 @@ export function iframeSrcCandidates(markup) {
       "data-src",
       "data-wpfc-original-src",
       "data-lazy-src",
+      "data-litespeed-src",
     ]),
   );
 }
