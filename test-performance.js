@@ -21,7 +21,8 @@ function fakeFetchFor(provider, hasCanonical) {
       return response(url, JSON.stringify({ air_date: "2025-01-02", name: "Episode 9", runtime: 60 }), 200);
     }
     if (/api\.themoviedb\.org\/3\/tv\/1\?/.test(url)) {
-      return response(url, JSON.stringify({ name: "Test Show", networks: [{ name: "Netflix" }], episode_run_time: [60] }), 200);
+      var title = provider === "yodesionline-net" ? "India's Best Dancer" : "Test Show";
+      return response(url, JSON.stringify({ name: title, networks: [{ name: "Netflix" }], episode_run_time: [60] }), 200);
     }
 
     if (provider === "desi-serials-to" || provider === "desi-flow") {
@@ -43,6 +44,10 @@ function fakeFetchFor(provider, hasCanonical) {
     if (provider === "desitvserials-se") {
       if (url.indexOf("/?s=test-show+") !== -1) return response(url, '<a href="https://desitvserials.se/test-show-2nd-january-2025/">episode</a>', 200);
       if (url.indexOf("desitvserials.se/test-show-2nd-") !== -1) return response(url, '<iframe src="https://vkspeed.com/embed-test.html"></iframe>', 200);
+    }
+
+    if (provider === "yodesionline-net" && url.indexOf("yodesionline.net/indias-best-dancer-2nd-january-2025-full-episode/") !== -1) {
+      return response(url, '<iframe src="https://vkspeed.com/embed-test.html"></iframe>', 200);
     }
 
     if (url.indexOf("vkspeed.com/embed-test.html") !== -1) {
@@ -86,6 +91,10 @@ async function check(provider, maxRequests, hasCanonical) {
   assert.strictEqual(flow[0].size, "343 MB");
   await check("desiruleztv-net", 6);
   await check("desitvserials-se", 6);
+  var yodesi = await check("yodesionline-net", 5);
+  assert.strictEqual(yodesi[0].name, "YoDesiOnline.net Vkspeed");
+  assert.strictEqual(yodesi[0].quality, "1.1 Mbps");
+  assert.strictEqual(yodesi[0].size, "477 MB");
   await check("mixdrop-desi", 4);
   await check("streamtape-desi", 7);
   var streamtape = await check("streamtape-size", 7);

@@ -10,6 +10,7 @@ var providers = {
   'filemoon-movieswatch': require('./providers/filemoon-movieswatch.js'),
   'streamwish-heymovies': require('./providers/streamwish-heymovies.js'),
   'dramavideo-desi': require('./providers/dramavideo-desi.js'),
+  'yodesionline-net': require('./providers/yodesionline-net.js'),
 };
 
 // TV content — daily soaps + trending shows
@@ -24,6 +25,7 @@ var tvContent = [
   { id: '248721', name: 'Udne Ki Aasha', season: 1, episode: 1 },
   { id: '237227', name: 'Bigg Boss', season: 19, episode: 106 },
   { id: '247769', name: 'The Great Indian Kapil Show', season: 5, episode: 1 },
+  { id: '99918', name: "India's Best Dancer", season: 5, episode: 22 },
   { id: '101352', name: 'Panchayat', season: 3, episode: 8 },
   { id: '84105', name: 'Mirzapur', season: 3, episode: 10 },
   { id: '203832', name: 'Taaza Khabar', season: 2, episode: 6 },
@@ -41,7 +43,7 @@ var movieContent = [
   { id: '872906', name: 'Jawan' },
 ];
 
-var tvProviders = ['desi-serials-to', 'desitvserials-se', 'desiruleztv-net', 'mixdrop-desi', 'streamtape-desi', 'dramavideo-desi'];
+var tvProviders = ['desi-serials-to', 'desitvserials-se', 'desiruleztv-net', 'mixdrop-desi', 'streamtape-desi', 'dramavideo-desi', 'yodesionline-net'];
 var movieProviders = ['mixdrop-desi', 'streamtape-desi', 'filemoon-movieswatch'];
 
 var TIMEOUT = 45000;
@@ -82,7 +84,7 @@ function formatStream(s) {
 
 async function runTests() {
   console.log('============================================================');
-  console.log('  COMPREHENSIVE PROVIDER VERIFICATION — v2.7.0');
+  console.log('  COMPREHENSIVE PROVIDER VERIFICATION — v2.8.1');
   console.log('  Testing ' + Object.keys(providers).length + ' providers with real Hindi content');
   console.log('============================================================\n');
 
