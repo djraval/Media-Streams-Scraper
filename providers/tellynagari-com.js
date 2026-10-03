@@ -16,12 +16,12 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/yodesionline-net/index.js
-var yodesionline_net_exports = {};
-__export(yodesionline_net_exports, {
+// src/tellynagari-com/index.js
+var tellynagari_com_exports = {};
+__export(tellynagari_com_exports, {
   getStreams: () => getStreams
 });
-module.exports = __toCommonJS(yodesionline_net_exports);
+module.exports = __toCommonJS(tellynagari_com_exports);
 
 // src/lib/constants.js
 var TMDB_BASE = "https://api.themoviedb.org/3";
@@ -1345,21 +1345,57 @@ function chainProvider(cfg) {
   return { getStreams: getStreams2, getStreamsForRequest };
 }
 
-// src/yodesionline-net/index.js
+// src/tellynagari-com/index.js
+var ARTICLEWEB = "https://articleweb.xyz/vid/";
+var GATE_MAP = { girmeet: "gdrive", kratike: "vkspeed" };
+var GATE_PROBES = ["gdrive", "vkspeed"];
+var GATE_URL_RE = /\/usn\/([A-Za-z0-9_-]+)\.php\?[^"']*docid=([A-Za-z0-9_-]+)/i;
+var SITE_HOST_RE = /^https:\/\/(?:www\.)?tellynagari\.com\//i;
+var NON_POST_RE = /\/(category|tag|author|page|wp-|feed|xmlrpc|comments)\b|\/20\d{2}(?:\/\d{2})?\/?$|\/(about|contact|dmca|privacy|terms)/i;
+var LATEST_WINDOW_MS = 10 * 24 * 60 * 60 * 1e3;
 var provider = chainProvider({
-  name: "YoDesiOnline.net",
-  siteBase: "https://yodesionline.net",
+  name: "TellyNagari",
+  siteBase: "https://tellynagari.com",
   searchPath: "/?s=",
-  hostRe: /^https:\/\/(?:www\.)?yodesionline\.net\//i,
-  stripTrailingS: true,
+  hostRe: SITE_HOST_RE,
+  nonPostRe: NON_POST_RE,
   mediaTypes: ["tv"],
-  postUrls: function(request, slugs) {
-    var dateSlug = episodeDateSlug(request.airDate);
-    if (!dateSlug)
+  // tellyduniya gate URL -> articleweb player page(s). Known gates map
+  // directly; unknown gates probe both known paths.
+  transforms: [
+    {
+      match: GATE_URL_RE,
+      expand: function(m) {
+        var gate = m[1].toLowerCase();
+        var paths = GATE_MAP[gate] ? [GATE_MAP[gate]] : GATE_PROBES;
+        return paths.map(function(p) {
+          return ARTICLEWEB + p + ".php?id=" + encodeURIComponent(m[2]);
+        });
+      }
+    }
+  ],
+  // Tellynagari keeps only the LATEST episode post per show: strict matching
+  // misses older eps, and an air-dated request must not be served the newest
+  // post. Only undated requests may accept a single fresh dated post.
+  postCandidates: function(markup, request) {
+    var hrefs = links(markup);
+    var strict = episodePostCandidates(hrefs, request, SITE_HOST_RE, NON_POST_RE);
+    if (strict.length > 0)
+      return strict;
+    if (request.airDate)
       return [];
-    return slugs.map(function(slug) {
-      return "https://yodesionline.net/" + slug + "-" + dateSlug + "-full-episode/";
-    });
+    var dated = dedupe(
+      hrefs.filter(function(href) {
+        return SITE_HOST_RE.test(href) && !NON_POST_RE.test(href) && slugTimestamp(href) > 0 && (request.slugCandidates || []).some(function(slug) {
+          return href.toLowerCase().indexOf(slug) !== -1;
+        });
+      })
+    );
+    if (dated.length !== 1)
+      return [];
+    if (Math.abs(Date.now() - slugTimestamp(dated[0])) > LATEST_WINDOW_MS)
+      return [];
+    return dated;
   }
 });
 function getStreams(tmdbId, mediaType, season, episode) {

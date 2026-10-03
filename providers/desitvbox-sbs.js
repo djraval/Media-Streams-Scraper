@@ -16,12 +16,12 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/yodesionline-net/index.js
-var yodesionline_net_exports = {};
-__export(yodesionline_net_exports, {
+// src/desitvbox-sbs/index.js
+var desitvbox_sbs_exports = {};
+__export(desitvbox_sbs_exports, {
   getStreams: () => getStreams
 });
-module.exports = __toCommonJS(yodesionline_net_exports);
+module.exports = __toCommonJS(desitvbox_sbs_exports);
 
 // src/lib/constants.js
 var TMDB_BASE = "https://api.themoviedb.org/3";
@@ -1345,21 +1345,46 @@ function chainProvider(cfg) {
   return { getStreams: getStreams2, getStreamsForRequest };
 }
 
-// src/yodesionline-net/index.js
+// src/desitvbox-sbs/index.js
 var provider = chainProvider({
-  name: "YoDesiOnline.net",
-  siteBase: "https://yodesionline.net",
-  searchPath: "/?s=",
-  hostRe: /^https:\/\/(?:www\.)?yodesionline\.net\//i,
+  name: "DesiTvBox.sbs",
+  siteBase: "https://desitvbox.sbs",
+  hostRe: /^https:\/\/(?:www\.)?desitvbox\.sbs\//i,
+  nonPostRe: /\/(category|tag|author|page|wp-|feed|xmlrpc|comments)\b|\/20\d{2}(?:\/\d{2})?\/?$/i,
   stripTrailingS: true,
   mediaTypes: ["tv"],
+  // Post URLs are predictable from slug + air date — try them before search.
   postUrls: function(request, slugs) {
     var dateSlug = episodeDateSlug(request.airDate);
     if (!dateSlug)
       return [];
     return slugs.map(function(slug) {
-      return "https://yodesionline.net/" + slug + "-" + dateSlug + "-full-episode/";
+      return "https://desitvbox.sbs/" + slug + "-" + dateSlug + "-video-episode-update-online/";
     });
+  },
+  // Path-style search, date terms first then bare slug.
+  searchUrls: function(request, slugs) {
+    var dateSlug = episodeDateSlug(request.airDate);
+    var urls = [];
+    var short = slugs.slice(0, 2);
+    if (dateSlug) {
+      var dateQuery = dateSlug.replace(/-/g, "+");
+      short.forEach(function(slug) {
+        urls.push("https://desitvbox.sbs/search/" + slug.replace(/-/g, "+") + "+" + dateQuery + "/");
+      });
+    }
+    short.forEach(function(slug) {
+      urls.push("https://desitvbox.sbs/search/" + slug.replace(/-/g, "+") + "/");
+    });
+    return dedupe(urls);
+  },
+  // Streams found inside the site's own player-skin pages get labeled by skin.
+  hopTag: function(hopUrl) {
+    if (hopUrl.indexOf("mobiplayer") !== -1)
+      return "Plyr skin";
+    if (hopUrl.indexOf("jwplayer") !== -1)
+      return "JW skin";
+    return "Fluid skin";
   }
 });
 function getStreams(tmdbId, mediaType, season, episode) {

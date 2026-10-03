@@ -1,3 +1,28 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+// src/desiruleztv-net/index.js
+var desiruleztv_net_exports = {};
+__export(desiruleztv_net_exports, {
+  getStreams: () => getStreams
+});
+module.exports = __toCommonJS(desiruleztv_net_exports);
+
 // src/lib/constants.js
 var TMDB_BASE = "https://api.themoviedb.org/3";
 var TMDB_API_KEY = "4e1899804b6db6d01db1e59391e8a5fe";
@@ -32,8 +57,6 @@ var CHANNEL_SLUGS = {
   "starplus": ["star-plus"],
   "zee tv": ["zee-tv"]
 };
-var VKSPEED_HOSTS = ["vkspeed.com", "vkcdn5.com", "vkcdn6.com", "vkcdn7.com"];
-var VKPRIME_HOSTS = ["vkprime.com"];
 
 // src/lib/http.js
 function resolveFetch(options) {
@@ -73,6 +96,70 @@ function fetchJson(fetchImpl, url) {
     }
     return response.json();
   });
+}
+function cachingFetch(fetchImpl) {
+  var cache = {};
+  return function(url, options) {
+    options = options || {};
+    var h = options.headers || {};
+    var key = (options.method || "GET") + "|" + url + "|" + (h["User-Agent"] || "") + "|" + (h.Referer || h.referer || "") + "|" + (typeof options.body === "string" ? options.body : "");
+    if (!cache[key]) {
+      cache[key] = fetchImpl(url, options).then(function(res) {
+        if (!res || res.ok === false) {
+          return { ok: false, status: res ? res.status : 0 };
+        }
+        var hdrs = {};
+        if (res.headers && typeof res.headers.get === "function") {
+          ["content-range", "content-length", "content-type"].forEach(function(n) {
+            hdrs[n] = res.headers.get(n);
+          });
+        }
+        return res.text().then(function(body) {
+          return { ok: true, status: res.status, statusText: res.statusText, url: res.url || url, body, headers: hdrs };
+        });
+      }).catch(function() {
+        return { ok: false, status: 0 };
+      });
+    }
+    return cache[key].then(function(cached) {
+      if (!cached || !cached.ok) {
+        return {
+          ok: false,
+          status: cached ? cached.status : 0,
+          text: function() {
+            return Promise.resolve("");
+          },
+          json: function() {
+            return Promise.resolve(null);
+          },
+          headers: { get: function() {
+            return null;
+          } }
+        };
+      }
+      return {
+        ok: true,
+        status: cached.status,
+        statusText: cached.statusText,
+        url: cached.url,
+        headers: {
+          get: function(name) {
+            return cached.headers[String(name).toLowerCase()] || null;
+          }
+        },
+        text: function() {
+          return Promise.resolve(cached.body);
+        },
+        json: function() {
+          try {
+            return Promise.resolve(JSON.parse(cached.body));
+          } catch (e) {
+            return Promise.resolve(null);
+          }
+        }
+      };
+    });
+  };
 }
 function fetchContentLength(fetchImpl, url, headers) {
   return fetchImpl(url, { method: "GET", headers: Object.assign({}, headers || {}, { Range: "bytes=0-0" }) }).then(function(response) {
@@ -125,14 +212,14 @@ function isPlaceholderUrl(url) {
   var lower = String(url || "").toLowerCase();
   return lower.indexOf("/ads/") !== -1 || lower.indexOf("127.0.0.1") !== -1;
 }
-function embedHostRegex(hosts, pathPattern) {
-  var escaped = hosts.map(function(h) {
-    return h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  });
-  return new RegExp(
-    "^https://(?:www\\.)?(?:" + escaped.join("|") + ")/" + pathPattern + "$",
-    "i"
-  );
+function nextUriLine(lines, from) {
+  for (var j = from; j < lines.length; j += 1) {
+    var line = lines[j].trim();
+    if (line && line.charAt(0) !== "#") {
+      return line;
+    }
+  }
+  return "";
 }
 function decodeText(raw) {
   var text = String(raw || "").replace(/&amp;/gi, "&").replace(/&#038;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
@@ -168,6 +255,9 @@ function mediaCandidates(raw, extension) {
 function mp4Candidates(raw) {
   return mediaCandidates(raw, "mp4");
 }
+function m3u8Candidates(raw) {
+  return mediaCandidates(raw, "m3u8");
+}
 function attrValues(markup, tags, attrs) {
   var tagAlternation = tags.join("|");
   var attrAlternation = attrs.join("|");
@@ -190,16 +280,12 @@ function attrValues(markup, tags, attrs) {
 function links(markup) {
   return attrValues(markup, ["a", "link", "area"], ["href"]);
 }
-function iframeSrcCandidates(markup) {
-  return dedupe(
-    attrValues(markup, ["iframe"], [
-      "src",
-      "data-src",
-      "data-wpfc-original-src",
-      "data-lazy-src",
-      "data-litespeed-src"
-    ])
-  );
+function resolveRelativeUrl(baseUrl, relative) {
+  try {
+    return new URL(relative, baseUrl).toString();
+  } catch (e) {
+    return relative;
+  }
 }
 
 // src/lib/tmdb.js
@@ -320,7 +406,184 @@ function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
   return Promise.reject(new Error("Unsupported media type: " + mediaType));
 }
 
+// src/lib/episodes.js
+var MONTH_NUM = {
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
+  // Abbreviated forms (tellynagari-style slugs: "27th-sep-2026")
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  sept: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11
+};
+var NON_EPISODE_RE = /promo|trailer|teaser|preview|spoiler|coming-soon|written-update|review/i;
+function slugTimestamp(href) {
+  var lower = String(href || "").toLowerCase();
+  var m = lower.match(/(\d{1,2})(?:st|nd|rd|th)-([a-z]+)-(\d{4})/);
+  if (m && MONTH_NUM[m[2]] !== void 0) {
+    return Date.UTC(Number(m[3]), MONTH_NUM[m[2]], Number(m[1]));
+  }
+  m = lower.match(/([a-z]+)-(\d{1,2})(?:st|nd|rd|th)-(\d{4})/);
+  if (m && MONTH_NUM[m[1]] !== void 0) {
+    return Date.UTC(Number(m[3]), MONTH_NUM[m[1]], Number(m[2]));
+  }
+  return 0;
+}
+function postSlugVariants(request) {
+  var candidates = request.slugCandidates || [];
+  var extra = [];
+  for (var i = 0; i < candidates.length; i++) {
+    var stripped = candidates[i].replace(/-\d{4}$/, "");
+    if (stripped !== candidates[i]) {
+      extra.push(stripped);
+    }
+    extra.push(candidates[i].replace(/-s(?=-|$)/g, "s"));
+  }
+  return dedupe(candidates.concat(extra));
+}
+function hasYearSuffix(slugCandidates2) {
+  return (slugCandidates2 || []).some(function(slug) {
+    return /-\d{4}$/.test(slug);
+  });
+}
+function showYear(slugCandidates2) {
+  for (var i = 0; i < (slugCandidates2 || []).length; i++) {
+    var m = slugCandidates2[i].match(/-(\d{4})$/);
+    if (m)
+      return m[1];
+  }
+  return "";
+}
+function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVariants) {
+  slugVariants = slugVariants || postSlugVariants(request);
+  var dateSlug = episodeDateSlug(request.airDate);
+  var ep = Number(request.episode || 0);
+  var links2 = dedupe(
+    (hrefs || []).map(function(href) {
+      return String(href || "").split("#")[0];
+    }).filter(function(href) {
+      if (!hostRe.test(href))
+        return false;
+      if (rejectRe && rejectRe.test(href))
+        return false;
+      if (NON_EPISODE_RE.test(href))
+        return false;
+      var lower = href.toLowerCase();
+      return slugVariants.some(function(slug) {
+        return lower.indexOf(slug) !== -1;
+      });
+    })
+  );
+  var year = showYear(request.slugCandidates);
+  if (year && hasYearSuffix(request.slugCandidates)) {
+    var fullSlug = (request.slugCandidates || []).filter(function(s) {
+      return s.indexOf("-" + year) !== -1;
+    });
+    var strict = links2.filter(function(href) {
+      var lower = href.toLowerCase();
+      return fullSlug.some(function(slug) {
+        return lower.indexOf(slug) !== -1;
+      });
+    });
+    if (strict.length === 0) {
+      strict = links2.filter(function(href) {
+        var lower = href.toLowerCase();
+        if (lower.indexOf(year) !== -1)
+          return true;
+        var ts = slugTimestamp(href);
+        return ts > 0 && new Date(ts).getUTCFullYear() === Number(year);
+      });
+    }
+    links2 = strict;
+  }
+  if (dateSlug) {
+    var dateVariants = [dateSlug];
+    var dm = dateSlug.match(/^(\d+\w{2})-([a-z]+)-(\d{4})$/);
+    if (dm)
+      dateVariants.push(dm[1] + "-" + dm[2].slice(0, 3) + "-" + dm[3]);
+    var dated = links2.filter(function(href) {
+      var lower = href.toLowerCase();
+      return dateVariants.some(function(v) {
+        return lower.indexOf(v) !== -1;
+      });
+    });
+    if (dated.length > 0)
+      return dated;
+  }
+  if (ep > 0) {
+    var epRe = new RegExp("episode-" + ep + "(?:[/-]|$)");
+    var numbered = links2.filter(function(href) {
+      return epRe.test(href.toLowerCase());
+    });
+    if (numbered.length > 0)
+      return numbered;
+  }
+  if (ep > 0) {
+    var byTs = {};
+    links2.forEach(function(href) {
+      var ts = slugTimestamp(href);
+      if (ts > 0) {
+        if (!byTs[ts])
+          byTs[ts] = [];
+        byTs[ts].push(href);
+      }
+    });
+    var dates = Object.keys(byTs).map(Number).sort(function(a, b) {
+      return a - b;
+    });
+    var target = dates[ep - 1];
+    if (target) {
+      if (request.airDate) {
+        var airTs = Date.parse(request.airDate + "T00:00:00Z");
+        if (isNaN(airTs) || Math.abs(target - airTs) > 2 * 24 * 60 * 60 * 1e3) {
+          return [];
+        }
+      }
+      return byTs[target];
+    }
+  }
+  return [];
+}
+
 // src/lib/packer.js
+var B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+function decodeBase64(raw) {
+  var input = String(raw || "").replace(/[^A-Za-z0-9+/]/g, "");
+  var output = "";
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < input.length; i++) {
+    var idx = B64_CHARS.indexOf(input.charAt(i));
+    if (idx === -1) {
+      continue;
+    }
+    buffer = buffer << 6 | idx;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output += String.fromCharCode(buffer >> bits & 255);
+    }
+  }
+  return output;
+}
 function packerEncode(n, base) {
   if (n === 0)
     return "0";
@@ -356,6 +619,21 @@ function unpack(blob) {
     out = out.replace(new RegExp("\\b" + token + "\\b", "g"), keys[i]);
   }
   return out;
+}
+function decodeJuicyCodes(html) {
+  var match = String(html || "").match(/JuicyCodes\.Run\(([^)]+)\)/s);
+  if (!match) {
+    return "";
+  }
+  var fragments = match[1].match(/"([^"]*)"|'([^']*)'/g);
+  if (!fragments) {
+    return "";
+  }
+  var payload = "";
+  for (var i = 0; i < fragments.length; i++) {
+    payload += fragments[i].replace(/^["']|["']$/g, "");
+  }
+  return unpack(decodeBase64(payload));
 }
 
 // src/lib/vkplayer.js
@@ -414,6 +692,167 @@ function resolveVkPlayer(embedUrl, refererUrl, options) {
     });
   }).catch(function() {
     return [];
+  });
+}
+
+// src/lib/flow.js
+function hlsQualityFromManifest(raw) {
+  var matches = String(raw || "").matchAll(/RESOLUTION=\d+x(\d{3,4})/gi);
+  var max = 0;
+  for (var m of matches) {
+    var height = Number(m[1]);
+    if (height > max) {
+      max = height;
+    }
+  }
+  return max > 0 ? max + "p" : "unknown";
+}
+function parseHlsMasterPlaylist(raw, baseUrl) {
+  var variants = [];
+  var lines = String(raw || "").split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line.startsWith("#EXT-X-STREAM-INF:")) {
+      var resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
+      var avgBwMatch = line.match(/AVERAGE-BANDWIDTH=(\d+)/i);
+      var bwMatch = line.match(/BANDWIDTH=(\d+)/i);
+      var height = resMatch ? Number(resMatch[1]) : 0;
+      var bandwidth = avgBwMatch ? Number(avgBwMatch[1]) : bwMatch ? Number(bwMatch[1]) : 0;
+      if (bandwidth > 1e8) {
+        bandwidth = Math.round(bandwidth / 1e3);
+        if (bandwidth > 1e8)
+          bandwidth = 0;
+      }
+      var urlLine = nextUriLine(lines, i + 1);
+      if (urlLine) {
+        variants.push({
+          url: resolveRelativeUrl(baseUrl, urlLine),
+          height,
+          bandwidth
+        });
+      }
+    }
+  }
+  variants.sort(function(a, b) {
+    return (b.height || b.bandwidth) - (a.height || a.bandwidth);
+  });
+  return variants;
+}
+function flowVariantLabel(url) {
+  var match = String(url || "").match(/flow\.tvlogy\.to\/([a-z0-9]+)\//i);
+  if (!match) {
+    return "";
+  }
+  var variant = match[1].toLowerCase();
+  if (variant.startsWith("embed")) {
+    return "embed";
+  }
+  if (variant.startsWith("plyr")) {
+    return "plyr";
+  }
+  if (variant.startsWith("nflix")) {
+    return "nflix";
+  }
+  if (variant.startsWith("player")) {
+    return "player";
+  }
+  return variant;
+}
+function buildFlowStream(quality, size, duration, playerUrl, streamHeaders, url) {
+  return {
+    backend: "flow",
+    kind: "hls",
+    quality,
+    url,
+    size,
+    duration,
+    sourceTag: flowVariantLabel(playerUrl),
+    headers: streamHeaders
+  };
+}
+function resolveFlowPlayer(playerUrl, refererUrl, options) {
+  options = options || {};
+  var fetchImpl = resolveFetch(options);
+  var streamHeaders = { Referer: playerUrl, "User-Agent": UA };
+  return fetchText(fetchImpl, playerUrl, browserHeaders(refererUrl)).then(function(player) {
+    if (!player) {
+      return null;
+    }
+    var directCandidates = m3u8Candidates(player);
+    var decodedCandidates = m3u8Candidates(decodeJuicyCodes(player));
+    var masterUrl = directCandidates[0] || decodedCandidates[0] || "";
+    if (!masterUrl) {
+      return null;
+    }
+    return fetchText(fetchImpl, masterUrl, browserHeaders(playerUrl)).then(function(manifest) {
+      var variants = parseHlsMasterPlaylist(manifest, masterUrl);
+      var quality = variants.length > 0 && variants[0].height > 0 ? variants[0].height + "p" : hlsQualityFromManifest(manifest);
+      var stream = buildFlowStream(quality, "", 0, playerUrl, streamHeaders, masterUrl);
+      stream.bandwidth = variants.length > 0 ? variants[0].bandwidth : 0;
+      return stream;
+    });
+  });
+}
+
+// src/lib/upbolt.js
+var CRAWLER_UA = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)";
+var UPBOLT_RE = /upbolt\.to\/(?:emb-|e\/)[A-Za-z0-9_-]+/i;
+function resolveUpbolt(embedUrl, options) {
+  options = options || {};
+  var fetchImpl = resolveFetch(options);
+  if (embedUrl.indexOf("http") !== 0) {
+    embedUrl = "https://" + embedUrl.replace(/^\/\//, "");
+  }
+  var idMatch = embedUrl.match(/\/(?:emb-|e\/)([A-Za-z0-9_-]+)/i);
+  var crawler = { headers: { "User-Agent": CRAWLER_UA, Accept: "*/*" } };
+  var page;
+  if (idMatch && /\/e\//i.test(embedUrl)) {
+    page = fetchText(fetchImpl, "https://upbolt.to/dl", {
+      method: "POST",
+      headers: {
+        "User-Agent": CRAWLER_UA,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: "op=embed&file_code=" + idMatch[1] + "&auto=1"
+    });
+  } else {
+    page = fetchText(fetchImpl, embedUrl, crawler);
+  }
+  return page.then(function(html) {
+    if (!html)
+      return null;
+    var m = html.match(/sources\s*:\s*\[\s*\{[^}]*?file\s*:\s*["']([^"']+\.m3u8[^"']*)/i) || html.match(/["'](https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)["']/i);
+    if (!m)
+      return null;
+    var masterUrl = m[1].replace(/\\\//g, "/");
+    var tag = "";
+    var tm = html.match(/<title>([^<]+)<\/title>/i);
+    if (tm)
+      tag = tm[1].trim();
+    return fetchText(fetchImpl, masterUrl, crawler).then(function(manifest) {
+      var stream = {
+        backend: "upbolt",
+        kind: "hls",
+        quality: "",
+        url: masterUrl,
+        size: "",
+        sizeBytes: 0,
+        sourceTag: tag,
+        // The signed token is bound to the issuing UA class: playlist fetches
+        // must carry the crawler UA (the media segments are open). Nuvio applies
+        // stream.headers to playlist requests, same as Flow's Referer+UA.
+        headers: { "User-Agent": CRAWLER_UA }
+      };
+      if (manifest) {
+        var variants = parseHlsMasterPlaylist(manifest, masterUrl);
+        if (variants.length > 0) {
+          if (variants[0].height > 0)
+            stream.quality = variants[0].height + "p";
+          stream.bandwidth = variants[0].bandwidth;
+        }
+      }
+      return stream;
+    });
   });
 }
 
@@ -507,199 +946,427 @@ function toNuvioStream(request, stream) {
   };
 }
 
-// src/desiruleztv-net/index.js
-var SITE_BASE = "https://desiruleztv.net";
-var SEARCH_PATH = "/?s=";
-var CATEGORY_PATH = "/category/";
-var ARCHIVE_PAGE_PATH = "/page/";
-var DESIRULEZ_HOST_RE = new RegExp(
-  "^https://(?:www\\.)?desiruleztv\\.net/",
-  "i"
-);
-var VKPRIME_RE = embedHostRegex(VKPRIME_HOSTS, "embed-[A-Za-z0-9-]+\\.html");
-var VKSPEED_RE = embedHostRegex(VKSPEED_HOSTS, "embed-[A-Za-z0-9-]+\\.html");
-function displayBackend2(backend) {
-  return String(backend || "source").replace(/(^|[-_\s]+)([a-z])/g, function(_match, prefix, ch) {
-    return prefix + ch.toUpperCase();
-  }).replace(/[-_]+/g, "");
+// src/lib/chain.js
+var VK_EMBED_RE = /(vkspeed|vkprime)\.com\/embed-[A-Za-z0-9_-]+(?:-\d+x\d+)?\.html/i;
+var FLOW_RE = /flow\.tvlogy\.to\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/?/i;
+var MEDIA_META_RE = /\/media_meta\.php\?v=/i;
+var M3U8_RE = /\.m3u8(?:\?|$)/i;
+var MP4_RE = /\.mp4(?:\?|$)/i;
+var HOP_PATH_RE = /\.php\?[^"'\s]*(?:id|v|url|docid|slug|source|src|file|embed|video|watch|play|go)=/i;
+var JUNK_RE = /(?:facebook|twitter|instagram|t\.me|telegram|whatsapp|pinterest|youtube|google|gstatic|doubleclick|googlesyndication|popads|histats|feedburner|gravatar|disqus|w3\.org|schema\.org|gmpg\.org|creativecommons)\.|wp-(?:content|includes|json)|xmlrpc|\/feed\/|sitemap|\.css|\.js(?:on)?(?:\?|$)|\.(?:png|jpe?g|gif|svg|ico|woff2?|webp)(?:\?|$)|wp-login|#respond|\/comments?\//i;
+function stripTags(raw) {
+  return String(raw || "").replace(/<[^>]*>/g, "").trim();
 }
-function normalizeIframeUrl(src) {
-  var url = String(src || "").trim();
-  if (url.startsWith("//")) {
-    return "https:" + url;
+function harvestPage(markup, pageUrl) {
+  var found = [];
+  var push = function(url, label2) {
+    if (!url)
+      return;
+    url = decodeText(String(url).trim());
+    if (url.indexOf("//") === 0)
+      url = "https:" + url;
+    if (url.charAt(0) === "/" || url.indexOf("http") !== 0) {
+      url = resolveRelativeUrl(pageUrl, url);
+    }
+    if (url.indexOf("http") === 0)
+      found.push({ url, label: label2 || "" });
+  };
+  var aRe = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  var m;
+  while ((m = aRe.exec(markup)) !== null) {
+    var inner = stripTags(m[2]);
+    var pm = inner.match(/\(([^()]{1,40})\)/);
+    var label = pm ? pm[1] : inner.slice(0, 60);
+    var urls = m[1].match(/https?:\/\/[^"'\s)]+|\/\/[^"'\s)]+/g) || [];
+    urls.forEach(function(u) {
+      push(u.replace(/[,;]+$/, ""), label);
+    });
+  }
+  var attrRe = /(?:src|href|file|source|data-[A-Za-z_-]+|streamUrl)\s*=\s*["']([^"'<>\s]+)["']/gi;
+  while ((m = attrRe.exec(markup)) !== null) {
+    push(m[1], "");
+  }
+  var bareRe = /(https?:\/\/[^"'\s<>)\]]+(?:vkspeed\.com|vkprime\.com|flow\.tvlogy\.to|streaming\.disk\.yandex\.net|media_meta\.php|\.m3u8|\.mp4)[^"'\s<>)\]]*)/gi;
+  while ((m = bareRe.exec(markup)) !== null) {
+    push(m[1], "");
+  }
+  var seen = {};
+  return found.filter(function(e) {
+    if (seen[e.url])
+      return false;
+    seen[e.url] = true;
+    return true;
+  });
+}
+function cleanPartTitle(title) {
+  return String(title || "").replace(/\s*\d{1,2}(?:st|nd|rd|th)\s+\w+\s+\d{4}\s*$/i, "").trim();
+}
+function resolveBackend(url, referer, fetchImpl, ctx) {
+  if (MEDIA_META_RE.test(url)) {
+    var metaBase = url.slice(0, url.lastIndexOf("/") + 1);
+    return fetchJson(fetchImpl, url).then(function(meta) {
+      if (!meta || !meta.source || !meta.source.file)
+        return null;
+      var abs = function(u) {
+        return u && u.indexOf("http") !== 0 ? metaBase + u : u;
+      };
+      return {
+        backend: "dstshndisk",
+        kind: "mp4",
+        quality: "480p",
+        url: abs(meta.source.file),
+        fallbackUrl: abs(meta.source.fallbackFile),
+        size: "",
+        sizeBytes: 0,
+        sourceTag: cleanPartTitle(meta.source.title),
+        headers: null
+      };
+    });
+  }
+  var vkM = url.match(VK_EMBED_RE);
+  if (vkM) {
+    var embedUrl = "https://" + vkM[0].replace(/^https?:\/\//i, "");
+    return resolveVkPlayer(embedUrl, referer, { fetchImpl }).then(function(sources) {
+      var real = (sources || []).filter(function(s) {
+        return !isPlaceholderUrl(s.url);
+      });
+      if (real.length === 0)
+        return null;
+      var best = real[0];
+      var stream = {
+        backend: embedUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime",
+        kind: "mp4",
+        quality: best.quality || "unknown",
+        url: best.url,
+        size: "",
+        sizeBytes: 0,
+        sourceTag: ctx.label || "",
+        headers: best.headers
+      };
+      return fetchContentLength(fetchImpl, best.url, best.headers).then(function(sizeBytes) {
+        stream.size = formatBytes(sizeBytes);
+        stream.sizeBytes = sizeBytes;
+        return stream;
+      });
+    });
+  }
+  var fM = url.match(FLOW_RE);
+  if (fM) {
+    var flowUrl = fM[0].indexOf("http") === 0 ? fM[0] : "https://" + fM[0];
+    return resolveFlowPlayer(flowUrl, referer, { fetchImpl }).then(function(stream) {
+      if (stream && ctx.label && !stream.sourceTag)
+        stream.sourceTag = ctx.label;
+      return stream;
+    });
+  }
+  if (UPBOLT_RE.test(url)) {
+    return resolveUpbolt(url.indexOf("http") === 0 ? url : "https://" + url, {
+      fetchImpl
+    }).then(function(stream) {
+      if (stream && ctx.label && !stream.sourceTag)
+        stream.sourceTag = ctx.label;
+      return stream;
+    });
+  }
+  if (M3U8_RE.test(url)) {
+    return Promise.resolve({
+      backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
+      kind: "hls",
+      quality: "",
+      url,
+      size: "",
+      sizeBytes: 0,
+      sourceTag: ctx.label || "",
+      headers: null
+    });
+  }
+  if (MP4_RE.test(url)) {
+    return Promise.resolve({
+      backend: "mp4",
+      kind: "mp4",
+      quality: "",
+      url,
+      size: "",
+      sizeBytes: 0,
+      sourceTag: ctx.label || "",
+      headers: null
+    });
+  }
+  return Promise.resolve(null);
+}
+function candidateKey(url) {
+  var m;
+  if (m = url.match(/flow\.tvlogy\.to\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]+)/i)) {
+    return "flow:" + m[1];
+  }
+  if (m = url.match(/(vkspeed|vkprime)\.com\/embed-([A-Za-z0-9_-]+)/i)) {
+    return m[1].toLowerCase() + ":" + m[2];
+  }
+  if (m = url.match(/media_meta\.php\?v=([^&]+)/i)) {
+    return "meta:" + m[1];
+  }
+  if (m = url.match(/upbolt\.to\/(?:emb-|e\/)([A-Za-z0-9_-]+)/i)) {
+    return "upbolt:" + m[1];
   }
   return url;
 }
-function findPlayerIframes(markup) {
-  return dedupe(
-    iframeSrcCandidates(markup).map(normalizeIframeUrl).filter(function(href) {
-      return VKPRIME_RE.test(href) || VKSPEED_RE.test(href);
-    })
-  );
-}
-function buildSearchUrls(request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
-  var dateQuery = dateSlug.replace(/-/g, " ");
-  return (request.slugCandidates || []).slice(0, 2).map(function(slug) {
-    return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
-  });
-}
-function buildArchiveUrls(request) {
-  var urls = [];
-  var slugs = (request.slugCandidates || []).slice(0, 2);
-  for (var i = 0; i < slugs.length; i += 1) {
-    urls.push(SITE_BASE + CATEGORY_PATH + slugs[i] + "/");
-    urls.push(SITE_BASE + CATEGORY_PATH + slugs[i] + ARCHIVE_PAGE_PATH + "2/");
-    urls.push(SITE_BASE + CATEGORY_PATH + slugs[i] + ARCHIVE_PAGE_PATH + "3/");
-  }
-  return dedupe(urls);
-}
-function episodePageCandidates(markup, request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
-  return dedupe(
-    links(markup).filter(function(href) {
-      if (!DESIRULEZ_HOST_RE.test(href)) {
-        return false;
-      }
-      if (href.includes("/category/")) {
-        return false;
-      }
-      if (!href.toLowerCase().includes(dateSlug)) {
-        return false;
-      }
-      return (request.slugCandidates || []).some(function(slug) {
-        return href.toLowerCase().includes(slug);
+function partitionUrls(markup, pageUrl, cfg) {
+  var harvested = harvestPage(markup, pageUrl);
+  var backends = [];
+  var hops = [];
+  var hopSeen = {};
+  var backendSeen = {};
+  harvested.forEach(function(entry) {
+    var urls = [entry];
+    (cfg.transforms || []).forEach(function(t) {
+      var next = [];
+      urls.forEach(function(u) {
+        var mm = u.url.match(t.match);
+        if (mm) {
+          var out = t.expand(mm, u.url) || [];
+          out.forEach(function(nu) {
+            next.push(
+              typeof nu === "string" ? { url: nu, label: u.label } : { url: nu.url, label: nu.label || u.label }
+            );
+          });
+        } else {
+          next.push(u);
+        }
       });
-    })
-  );
+      urls = next;
+    });
+    urls.forEach(function(u) {
+      var url = u.url;
+      var key = candidateKey(url);
+      if (MEDIA_META_RE.test(url) || VK_EMBED_RE.test(url) || FLOW_RE.test(url) || M3U8_RE.test(url) || MP4_RE.test(url) || UPBOLT_RE.test(url)) {
+        if (!backendSeen[key]) {
+          backendSeen[key] = true;
+          backends.push({ url, label: u.label });
+        }
+        return;
+      }
+      var isHop = (HOP_PATH_RE.test(url) || (cfg.extraHopRe || []).some(function(re) {
+        return re.test(url);
+      })) && !JUNK_RE.test(url) && !(cfg.skipHopRe && cfg.skipHopRe.test(url));
+      if (isHop && !hopSeen[url]) {
+        hopSeen[url] = true;
+        hops.push({ url, label: u.label });
+      }
+    });
+  });
+  return { backends, hops };
 }
-function resolveFromEpisodeUrls(fetchImpl, episodeUrls) {
-  if (episodeUrls.length === 0) {
-    return Promise.resolve([]);
-  }
-  return Promise.all(
-    episodeUrls.map(function(url) {
-      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS }).catch(function(e) {
-        console.log("[DesiRulezTV.net] episode page fetch failed for " + url + ": " + (e && e.message));
+function resolvePost(fetchImpl, postUrl, cfg) {
+  var maxHops = cfg.maxHops || 8;
+  return fetchImpl(postUrl, { headers: BROWSER_HEADERS }).then(function(res) {
+    return res ? res.text() : null;
+  }).then(function(post) {
+    if (!post)
+      return [];
+    var found = partitionUrls(post, postUrl, cfg);
+    var backendJobs = found.backends.map(function(b) {
+      return resolveBackend(b.url, postUrl, fetchImpl, { label: b.label }).catch(function() {
         return null;
       });
-    })
-  ).then(function(episodePages) {
-    var allIframeUrls = dedupe(
-      episodePages.flatMap(function(page) {
-        return page ? findPlayerIframes(page) : [];
-      })
-    );
-    if (allIframeUrls.length === 0) {
-      return [];
-    }
-    return Promise.all(
-      allIframeUrls.map(function(iframeUrl) {
-        var backend = iframeUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime";
-        return resolveVkPlayer(iframeUrl, SITE_BASE + "/", { fetchImpl }).then(function(sources) {
-          var real = (sources || []).filter(function(s) {
-            return !isPlaceholderUrl(s.url);
-          });
-          if (real.length === 0) {
-            return null;
-          }
-          var best = real[0];
-          var stream = {
-            backend,
-            kind: "mp4",
-            quality: best.quality || "unknown",
-            url: best.url,
-            size: "",
-            sizeBytes: 0,
-            duration: 0,
-            sourceTag: "",
-            headers: best.headers
-          };
-          return fetchContentLength(fetchImpl, best.url, best.headers).then(function(sizeBytes) {
-            stream.size = formatBytes(sizeBytes);
-            stream.sizeBytes = sizeBytes;
-            return stream;
-          });
-        }).catch(function(e) {
-          console.log("[DesiRulezTV.net] player resolution failed for " + iframeUrl + ": " + (e && e.message));
-          return null;
+    });
+    var hopJobs = found.hops.slice(0, maxHops).map(function(hop) {
+      return fetchImpl(hop.url, {
+        headers: { Referer: postUrl, "User-Agent": BROWSER_HEADERS["User-Agent"] }
+      }).then(function(res) {
+        return res ? res.text() : null;
+      }).then(function(hopPage) {
+        if (!hopPage)
+          return [];
+        var inner = partitionUrls(hopPage, hop.url, cfg);
+        var hopTag = cfg.hopTag ? cfg.hopTag(hop.url) : hop.label || "";
+        return Promise.all(
+          inner.backends.map(function(b) {
+            return resolveBackend(b.url, hop.url, fetchImpl, {
+              label: b.label || hopTag
+            }).catch(function() {
+              return null;
+            });
+          })
+        );
+      }).catch(function() {
+        return [];
+      });
+    });
+    return Promise.all([Promise.all(backendJobs), Promise.all(hopJobs)]).then(function(groups) {
+      var streams = [];
+      groups[0].forEach(function(s) {
+        if (s)
+          streams.push(s);
+      });
+      groups[1].forEach(function(set) {
+        (set || []).forEach(function(s) {
+          if (s)
+            streams.push(s);
         });
-      })
-    ).then(function(resolved) {
-      return dedupeStreams(resolved);
+      });
+      return dedupeStreams(streams);
     });
-  });
-}
-function processArchive(fetchImpl, archiveUrls, request, index) {
-  if (index >= archiveUrls.length) {
-    return Promise.resolve([]);
-  }
-  return fetchText(fetchImpl, archiveUrls[index], { headers: BROWSER_HEADERS }).then(function(archive) {
-    if (!archive) {
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    }
-    var episodeUrls = episodePageCandidates(archive, request);
-    if (episodeUrls.length === 0) {
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    }
-    return resolveFromEpisodeUrls(fetchImpl, episodeUrls).then(function(streams) {
-      if (streams.length > 0) {
-        return streams;
-      }
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    });
-  });
-}
-function resolveDesiRulezTV(request, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  var searchUrls = buildSearchUrls(request);
-  var archiveUrls = buildArchiveUrls(request);
-  if (searchUrls.length > 0) {
-    return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function(page) {
-      var episodeUrls = episodePageCandidates(page, request);
-      return episodeUrls.length > 0 ? episodeUrls : null;
-    }).then(function(episodeUrls) {
-      if (episodeUrls) {
-        return resolveFromEpisodeUrls(fetchImpl, episodeUrls);
-      }
-      return processArchive(fetchImpl, archiveUrls, request, 0);
-    });
-  }
-  return processArchive(fetchImpl, archiveUrls, request, 0);
-}
-function getStreamsForRequest(request, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  return resolveDesiRulezTV(request, { fetchImpl }).then(function(resolved) {
-    return dedupeStreams(resolved).map(function(stream) {
-      stream.name = "DesiRulezTV.net " + displayBackend2(stream.backend);
-      if (stream.sourceTag) {
-        stream.name += " (" + stream.sourceTag + ")";
-      }
-      return toNuvioStream(request, stream);
-    });
-  }).catch(function(error) {
-    console.log("[DesiRulezTV.net] resolver failed: " + error.message);
+  }).catch(function() {
     return [];
   });
 }
+function displayBackend2(backend) {
+  return String(backend || "source").replace(/(^|[-_\s]+)([a-z])/g, function(_m, prefix, ch) {
+    return prefix + ch.toUpperCase();
+  }).replace(/[-_]+/g, "");
+}
+function wpSearchUrls(request, siteBase, searchPath, slugCandidates2, datedFirst) {
+  var dateSlug = episodeDateSlug(request.airDate);
+  var terms = function(s) {
+    return encodeURIComponent(s.replace(/-/g, " ")).replace(/%20/g, "+");
+  };
+  var urls = [];
+  var slugs = slugCandidates2.slice(0, 3);
+  if (dateSlug) {
+    var dq = dateSlug.replace(/-/g, " ");
+    slugs.forEach(function(s) {
+      urls.push(siteBase + searchPath + encodeURIComponent(s.replace(/-/g, " ") + " " + dq).replace(/%20/g, "+"));
+    });
+  }
+  slugs.forEach(function(s) {
+    urls.push(siteBase + searchPath + terms(s));
+  });
+  return dedupe(urls);
+}
+function chainProvider(cfg) {
+  var logTag = "[" + cfg.name + "]";
+  function slugVariants(request) {
+    var candidates = request.slugCandidates || [];
+    if (!cfg.stripTrailingS)
+      return candidates;
+    return dedupe(
+      candidates.map(function(slug) {
+        return slug.replace(/-s(?=-|$)/g, "s");
+      }).concat(candidates)
+    );
+  }
+  function searchUrls(request) {
+    if (cfg.searchUrls)
+      return cfg.searchUrls(request, slugVariants(request));
+    return wpSearchUrls(request, cfg.siteBase, cfg.searchPath || "/?s=", slugVariants(request));
+  }
+  function postCandidates(markup, request) {
+    if (cfg.postCandidates)
+      return cfg.postCandidates(markup, request);
+    return episodePostCandidates(links(markup), request, cfg.hostRe, cfg.nonPostRe);
+  }
+  function directUrls(request) {
+    return cfg.postUrls ? cfg.postUrls(request, slugVariants(request)) : [];
+  }
+  function listingUrls(request) {
+    return cfg.listingUrls ? cfg.listingUrls(request, slugVariants(request)) : [];
+  }
+  function postsFromPages(fetchImpl, urls, request) {
+    if (urls.length === 0)
+      return Promise.resolve(null);
+    return fetchFirstResult(fetchImpl, urls, { headers: BROWSER_HEADERS }, function(page) {
+      var cands = postCandidates(page, request);
+      return cands.length > 0 ? cands : null;
+    });
+  }
+  function resolveRequest(request, options) {
+    options = options || {};
+    var fetchImpl = cachingFetch(resolveFetch(options));
+    var maxPosts = cfg.maxPosts || 2;
+    function resolvePosts(urls) {
+      if (!urls || urls.length === 0)
+        return Promise.resolve([]);
+      return Promise.all(
+        urls.slice(0, maxPosts).map(function(url) {
+          return resolvePost(fetchImpl, url, cfg);
+        })
+      ).then(function(sets) {
+        var all = [];
+        sets.forEach(function(set) {
+          (set || []).forEach(function(s) {
+            if (s)
+              all.push(s);
+          });
+        });
+        return dedupeStreams(all);
+      });
+    }
+    function fromDiscovery() {
+      return postsFromPages(fetchImpl, searchUrls(request), request).then(function(posts) {
+        if (posts && posts.length > 0)
+          return resolvePosts(posts);
+        return postsFromPages(fetchImpl, listingUrls(request), request).then(resolvePosts);
+      });
+    }
+    var direct = directUrls(request);
+    if (direct.length > 0) {
+      var idx = 0;
+      var tryDirect = function() {
+        if (idx >= direct.length)
+          return Promise.resolve([]);
+        var url = direct[idx];
+        idx += 1;
+        return resolvePost(fetchImpl, url, cfg).then(function(streams) {
+          return streams.length > 0 ? streams : tryDirect();
+        });
+      };
+      return tryDirect().then(function(streams) {
+        return streams.length > 0 ? streams : fromDiscovery();
+      });
+    }
+    return fromDiscovery();
+  }
+  function getStreamsForRequest(request, options) {
+    return resolveRequest(request, options).then(function(resolved) {
+      return dedupeStreams(resolved).map(function(stream) {
+        if (cfg.streamName) {
+          stream.name = cfg.streamName(stream);
+        } else {
+          stream.name = cfg.name + " " + displayBackend2(stream.backend) + (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
+        }
+        return toNuvioStream(request, stream);
+      });
+    }).catch(function(error) {
+      console.log(logTag + " resolver failed: " + error.message);
+      return [];
+    });
+  }
+  function getStreams2(tmdbId, mediaType, season, episode) {
+    if (cfg.mediaTypes && cfg.mediaTypes.indexOf(mediaType) === -1) {
+      return Promise.resolve([]);
+    }
+    return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY }).then(function(request) {
+      return getStreamsForRequest(request, { fetchImpl: typeof fetch !== "undefined" ? fetch : null });
+    }).catch(function(error) {
+      console.log(logTag + " getStreams failed: " + error.message);
+      return [];
+    });
+  }
+  return { getStreams: getStreams2, getStreamsForRequest };
+}
+
+// src/desiruleztv-net/index.js
+var provider = chainProvider({
+  name: "DesiRulezTV.net",
+  siteBase: "https://desiruleztv.net",
+  searchPath: "/?s=",
+  hostRe: /^https:\/\/(?:www\.)?desiruleztv\.net\//i,
+  nonPostRe: /\/category\//i,
+  mediaTypes: ["tv"],
+  // Each show has /category/{slug}/ plus paginated archives — used when
+  // search yields no episode post.
+  listingUrls: function(_request, slugs) {
+    var urls = [];
+    slugs.slice(0, 2).forEach(function(slug) {
+      urls.push("https://desiruleztv.net/category/" + slug + "/");
+      urls.push("https://desiruleztv.net/category/" + slug + "/page/2/");
+      urls.push("https://desiruleztv.net/category/" + slug + "/page/3/");
+    });
+    return dedupe(urls);
+  }
+});
 function getStreams(tmdbId, mediaType, season, episode) {
-  if (mediaType !== "tv") {
-    return Promise.resolve([]);
-  }
-  return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY }).then(function(request) {
-    return getStreamsForRequest(request, { fetchImpl: typeof fetch !== "undefined" ? fetch : null });
-  }).catch(function(error) {
-    console.log("[DesiRulezTV.net] getStreams failed: " + error.message);
-    return [];
-  });
+  return provider.getStreams(tmdbId, mediaType, season, episode);
 }
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { getStreams };

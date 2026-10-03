@@ -41,11 +41,6 @@ function fakeFetchFor(provider, hasCanonical) {
       if (url.indexOf("desiruleztv.net/test-show-2nd-") !== -1) return response(url, '<iframe src="https://vkspeed.com/embed-test.html"></iframe>', 200);
     }
 
-    if (provider === "desitvserials-se") {
-      if (url.indexOf("/?s=test-show+") !== -1) return response(url, '<a href="https://desitvserials.se/test-show-2nd-january-2025/">episode</a>', 200);
-      if (url.indexOf("desitvserials.se/test-show-2nd-") !== -1) return response(url, '<iframe src="https://vkspeed.com/embed-test.html"></iframe>', 200);
-    }
-
     if (provider === "yodesionline-net" && url.indexOf("yodesionline.net/indias-best-dancer-2nd-january-2025-full-episode/") !== -1) {
       return response(url, '<iframe src="https://vkspeed.com/embed-test.html"></iframe>', 200);
     }
@@ -57,15 +52,6 @@ function fakeFetchFor(provider, hasCanonical) {
       return response(url, "x", 206, { "content-range": "bytes 0-0/500000000" });
     }
 
-    if (hasCanonical !== false && (provider === "mixdrop-desi" || provider === "streamtape-desi" || provider === "streamtape-size") &&
-        url.indexOf("test-show-2025-ep-09-hindi-season-1-watch-online-hd-print-free-download/") !== -1) {
-      var page = provider === "streamtape-size" ? '<a href="https://streamtape.com/v/abc">Streamtape 720p</a>' : "<html>canonical episode page without this host</html>";
-      return response(url, page, 200);
-    }
-    if (provider === "streamtape-size" && url.indexOf("streamtape.com/v/abc") !== -1) return response(url, "getElementById('norobotlink').innerHTML = '//streamtape.com/get_video?id=' + ('xxxxabc').substring(4)", 200);
-    if (provider === "streamtape-size" && url.indexOf("streamtape.com/get_video") !== -1) return response(url, "", 302, { location: "https://cdn.test/stream.mp4" });
-    if (provider === "streamtape-size" && url.indexOf("cdn.test/stream.mp4") !== -1) return response(url, "x", 206, { "content-range": "bytes 0-0/500000000" });
-    if (url.indexOf("ulluhd.com/") !== -1) return response(url, "<html></html>", 200);
     return response(url, "", 404);
   }
   fakeFetch.calls = calls;
@@ -74,7 +60,7 @@ function fakeFetchFor(provider, hasCanonical) {
 
 async function check(provider, maxRequests, hasCanonical) {
   var fakeFetch = fakeFetchFor(provider, hasCanonical);
-  var moduleName = provider === "desi-flow" ? "desi-serials-to" : provider === "streamtape-size" ? "streamtape-desi" : provider;
+  var moduleName = provider === "desi-flow" ? "desi-serials-to" : provider;
   global.fetch = fakeFetch;
   delete require.cache[require.resolve("./providers/" + moduleName + ".js")];
   var streams = await require("./providers/" + moduleName + ".js").getStreams("1", "tv", 1, 9);
@@ -90,18 +76,10 @@ async function check(provider, maxRequests, hasCanonical) {
   assert.strictEqual(flow[0].quality, "480p • 0.80 Mbps");
   assert.strictEqual(flow[0].size, "343 MB");
   await check("desiruleztv-net", 6);
-  await check("desitvserials-se", 6);
   var yodesi = await check("yodesionline-net", 5);
   assert.strictEqual(yodesi[0].name, "YoDesiOnline.net Vkspeed");
   assert.strictEqual(yodesi[0].quality, "1.1 Mbps");
   assert.strictEqual(yodesi[0].size, "477 MB");
-  await check("mixdrop-desi", 4);
-  await check("streamtape-desi", 7);
-  var streamtape = await check("streamtape-size", 7);
-  assert.strictEqual(streamtape[0].quality, "720p • 1.1 Mbps");
-  assert.strictEqual(streamtape[0].size, "477 MB");
-  await check("mixdrop-desi", 10, false);
-  await check("streamtape-desi", 12, false);
   console.log("performance request-budget checks passed");
 })().catch(function (error) {
   console.error(error.message);

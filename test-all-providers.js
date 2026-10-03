@@ -3,21 +3,27 @@
 
 var providers = {
   'desi-serials-to': require('./providers/desi-serials-to.js'),
-  'desitvserials-se': require('./providers/desitvserials-se.js'),
   'desiruleztv-net': require('./providers/desiruleztv-net.js'),
-  'mixdrop-desi': require('./providers/mixdrop-desi.js'),
-  'streamtape-desi': require('./providers/streamtape-desi.js'),
-  'filemoon-movieswatch': require('./providers/filemoon-movieswatch.js'),
-  'streamwish-heymovies': require('./providers/streamwish-heymovies.js'),
-  'dramavideo-desi': require('./providers/dramavideo-desi.js'),
   'yodesionline-net': require('./providers/yodesionline-net.js'),
+  'godesitvserials-com': require('./providers/godesitvserials-com.js'),
+  'apnetv-pro': require('./providers/apnetv-pro.js'),
+  'desitvbox-sbs': require('./providers/desitvbox-sbs.js'),
+  'desitellybox-to': require('./providers/desitellybox-to.js'),
+  'tellynagari-com': require('./providers/tellynagari-com.js'),
+  'yodesi-net': require('./providers/yodesi-net.js'),
+  'desiserials-su': require('./providers/desiserials-su.js'),
+  'bollyzone-to': require('./providers/bollyzone-to.js'),
 };
 
 // TV content — daily soaps + trending shows
 // NOTE: Episode numbers calibrated to what's actually available on source sites.
-// desitvserials-se/desiruleztv-net match by air date, not episode number.
+// Providers match by air-date slug, then "-episode-N" suffix, then chronological
+// position — so TMDB air_date gaps no longer zero out results.
 // Anupamaa latest on sites: July 10, 2026 (TMDB E2075). Testing E2070 (July 3) for availability.
 var tvContent = [
+  // Sa Re Ga Ma Pa 2026 — TMDB 335868 only has E1's air_date; E2-E4 exercise the
+  // date-less fallback (slug-only search + chronological position match).
+  { id: '335868', name: 'Sa Re Ga Ma Pa 2026', season: 1, episode: 3 },
   { id: '116479', name: 'Anupamaa', season: 1, episode: 2070 },
   { id: '16413', name: 'Yeh Rishta Kya Kehlata Hai', season: 1, episode: 80 },
   { id: '111453', name: 'Ghum Hai Kisikey Pyaar Meiin', season: 3, episode: 1 },
@@ -43,8 +49,8 @@ var movieContent = [
   { id: '872906', name: 'Jawan' },
 ];
 
-var tvProviders = ['desi-serials-to', 'desitvserials-se', 'desiruleztv-net', 'mixdrop-desi', 'streamtape-desi', 'dramavideo-desi', 'yodesionline-net'];
-var movieProviders = ['mixdrop-desi', 'streamtape-desi', 'filemoon-movieswatch'];
+var tvProviders = ['desi-serials-to', 'desiruleztv-net', 'yodesionline-net', 'godesitvserials-com', 'apnetv-pro', 'desitvbox-sbs', 'desitellybox-to', 'tellynagari-com', 'yodesi-net', 'desiserials-su', 'bollyzone-to'];
+var movieProviders = [];
 
 var TIMEOUT = 45000;
 
@@ -84,7 +90,7 @@ function formatStream(s) {
 
 async function runTests() {
   console.log('============================================================');
-  console.log('  COMPREHENSIVE PROVIDER VERIFICATION — v2.8.1');
+  console.log('  COMPREHENSIVE PROVIDER VERIFICATION — v3.0.0');
   console.log('  Testing ' + Object.keys(providers).length + ' providers with real Hindi content');
   console.log('============================================================\n');
 
@@ -113,29 +119,32 @@ async function runTests() {
     console.log('');
   }
 
-  // Movie tests
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('  MOVIES (Hindi)');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-
+  // Movie tests — skipped when no movie providers are enabled.
   var movieResults = {};
-  for (var content of movieContent) {
-    console.log('▶ ' + content.name + ' [' + content.id + ']');
-    var tests = movieProviders.map(function (p) {
-      return testProvider(p, content.id, 'movie', null, null);
-    });
-    var results = await Promise.all(tests);
-    movieResults[content.name] = results;
-    for (var r of results) {
-      var status = r.error ? '✗ ' + r.error : (r.streams.length > 0 ? '✓ ' + r.streams.length + ' streams' : '○ no streams');
-      console.log('  ' + r.provider.padEnd(22) + ' ' + status + ' (' + r.elapsed + 's)');
-      if (r.streams.length > 0) {
-        for (var s of r.streams.slice(0, 3)) {
-          console.log('      ' + formatStream(s));
+  if (movieProviders.length > 0) {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('  MOVIES (Hindi)');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    for (var content of movieContent) {
+      console.log('▶ ' + content.name + ' [' + content.id + ']');
+      var tests = movieProviders.map(function (p) {
+        return testProvider(p, content.id, 'movie', null, null);
+      });
+      var results = await Promise.all(tests);
+      movieResults[content.name] = results;
+      for (var r of results) {
+        var status = r.error ? '✗ ' + r.error : (r.streams.length > 0 ? '✓ ' + r.streams.length + ' streams' : '○ no streams');
+        console.log('  ' + r.provider.padEnd(22) + ' ' + status + ' (' + r.elapsed + 's)');
+        if (r.streams.length > 0) {
+          for (var s of r.streams.slice(0, 3)) {
+            console.log('      ' + formatStream(s));
+          }
         }
       }
+      console.log('');
     }
-    console.log('');
+  } else {
+    console.log('  MOVIES: no movie providers enabled — skipped\n');
   }
 
   // Summary

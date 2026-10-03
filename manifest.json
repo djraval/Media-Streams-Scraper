@@ -1,35 +1,27 @@
 {
   "name": "Desi-Serials Repo",
-  "version": "2.8.1",
+  "version": "3.9.2",
   "scrapers": [
     {
       "id": "desi-serials-to",
       "name": "Desi-Serials.to",
       "description": "Indian TV serial resolver using desi-serials.to with VkPrime, VkSpeed, and Flow player support.",
-      "version": "2.8.1",
+      "version": "3.0.0",
       "author": "djraval",
-      "supportedTypes": ["tv"],
-      "filename": "providers/desi-serials-to.js?v=2.8.1",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/desi-serials-to.js?v=3.9.2",
       "enabled": true,
       "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["mp4", "hls"],
-      "limited": true,
-      "disabledPlatforms": [],
-      "supportsExternalPlayer": true
-    },
-    {
-      "id": "desitvserials-se",
-      "name": "DesiTVSerials.se",
-      "description": "Indian TV serial resolver using desitvserials.se with VkPrime and VkSpeed player support.",
-      "version": "2.8.1",
-      "author": "djraval",
-      "supportedTypes": ["tv"],
-      "filename": "providers/desitvserials-se.js?v=2.8.1",
-      "enabled": true,
-      "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["mp4"],
+      "contentLanguage": [
+        "hi",
+        "en"
+      ],
+      "formats": [
+        "mp4",
+        "hls"
+      ],
       "limited": true,
       "disabledPlatforms": [],
       "supportsExternalPlayer": true
@@ -38,94 +30,21 @@
       "id": "desiruleztv-net",
       "name": "DesiRulezTV.net",
       "description": "Indian TV serial resolver using desiruleztv.net with VkPrime and VkSpeed player support.",
-      "version": "2.8.1",
+      "version": "3.0.0",
       "author": "djraval",
-      "supportedTypes": ["tv"],
-      "filename": "providers/desiruleztv-net.js?v=2.8.1",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/desiruleztv-net.js?v=3.9.2",
       "enabled": true,
       "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["mp4"],
-      "limited": true,
-      "disabledPlatforms": [],
-      "supportsExternalPlayer": true
-    },
-    {
-      "id": "mixdrop-desi",
-      "name": "MixDrop Desi",
-      "description": "Indian TV and movie resolver using watch-movies.com.pk with MixDrop player support. Includes reusable MixDrop embed resolver (Dean Edwards P.A.C.K.E.R. unpacker).",
-      "version": "2.8.1",
-      "author": "djraval",
-      "supportedTypes": ["tv", "movie"],
-      "filename": "providers/mixdrop-desi.js?v=2.8.1",
-      "enabled": true,
-      "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["mp4"],
-      "limited": true,
-      "disabledPlatforms": [],
-      "supportsExternalPlayer": true
-    },
-    {
-      "id": "streamtape-desi",
-      "name": "StreamTape Desi",
-      "description": "Indian TV and movie resolver using StreamTape embeds from watch-movies.com.pk and ulluhd.com. Resolves StreamTape robotlink/norobotlink JS to direct CDN MP4 URLs.",
-      "version": "2.8.1",
-      "author": "djraval",
-      "supportedTypes": ["tv", "movie"],
-      "filename": "providers/streamtape-desi.js?v=2.8.1",
-      "enabled": true,
-      "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["mp4"],
-      "limited": true,
-      "disabledPlatforms": [],
-      "supportsExternalPlayer": true
-    },
-    {
-      "id": "filemoon-movieswatch",
-      "name": "FileMoon MoviesWatchHD",
-      "description": "Bollywood movie resolver using movieswatchhd.com with FileMoon player. Decrypts AES-256-GCM encrypted playback data via crypto.subtle (Web Crypto API).",
-      "version": "2.8.1",
-      "author": "djraval",
-      "supportedTypes": ["movie"],
-      "filename": "providers/filemoon-movieswatch.js?v=2.8.1",
-      "enabled": true,
-      "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["hls"],
-      "limited": true,
-      "disabledPlatforms": [],
-      "supportsExternalPlayer": true
-    },
-    {
-      "id": "streamwish-heymovies",
-      "name": "StreamWish HeyMovies",
-      "description": "Indian movie and TV show resolver using heymovies.cyou with StreamWish player. Extracts HLS m3u8 URLs from P.A.C.K.E.R. obfuscated player pages via mirror server redirect.",
-      "version": "2.8.1",
-      "author": "djraval",
-      "supportedTypes": ["tv", "movie"],
-      "filename": "providers/streamwish-heymovies.js?v=2.8.1",
-      "enabled": false,
-      "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["hls"],
-      "limited": true,
-      "disabledPlatforms": [],
-      "supportsExternalPlayer": true
-    },
-    {
-      "id": "dramavideo-desi",
-      "name": "DramaVideo Desi",
-      "description": "Indian TV serial resolver using yehrishtakiakehlatahai.com with dramavideo.se player. Decrypts AES-CBC encrypted player page to extract HLS stream URLs.",
-      "version": "2.8.1",
-      "author": "djraval",
-      "supportedTypes": ["tv"],
-      "filename": "providers/dramavideo-desi.js?v=2.8.1",
-      "enabled": true,
-      "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["hls"],
+      "contentLanguage": [
+        "hi",
+        "en"
+      ],
+      "formats": [
+        "mp4"
+      ],
       "limited": true,
       "disabledPlatforms": [],
       "supportsExternalPlayer": true
@@ -134,17 +53,152 @@
       "id": "yodesionline-net",
       "name": "YoDesiOnline.net",
       "description": "Indian TV resolver using yodesionline.net with VkPrime and VkSpeed player support. Unsupported VidUp embeds are ignored.",
-      "version": "2.8.1",
+      "version": "3.0.0",
       "author": "djraval",
-      "supportedTypes": ["tv"],
-      "filename": "providers/yodesionline-net.js?v=2.8.1",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/yodesionline-net.js?v=3.9.2",
       "enabled": true,
       "logo": "",
-      "contentLanguage": ["hi", "en"],
-      "formats": ["mp4"],
+      "contentLanguage": [
+        "hi",
+        "en"
+      ],
+      "formats": [
+        "mp4"
+      ],
       "limited": true,
       "disabledPlatforms": [],
       "supportsExternalPlayer": true
+    },
+    {
+      "id": "godesitvserials-com",
+      "name": "GoDesiTVSerials.com",
+      "description": "Indian TV resolver using godesitvserials.com token API (MegaPlays MP4, Yandex HLS) plus DramaVideo embeds.",
+      "version": "3.1.0",
+      "author": "djraval",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/godesitvserials-com.js?v=3.9.2",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": [
+        "hi",
+        "en"
+      ],
+      "formats": [
+        "mp4",
+        "hls"
+      ],
+      "limited": true,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "apnetv-pro",
+      "name": "ApneTV.pro",
+      "description": "Indian TV resolver using apnetv.pro with DramaVideo player support.",
+      "version": "3.1.0",
+      "author": "djraval",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/apnetv-pro.js?v=3.9.2",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": [
+        "hi",
+        "en"
+      ],
+      "formats": [
+        "hls"
+      ],
+      "limited": true,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "desitvbox-sbs",
+      "name": "DesiTvBox.sbs",
+      "filename": "providers/desitvbox-sbs.js?v=3.9.2",
+      "mediaTypes": [
+        "tv"
+      ],
+      "formats": [
+        "mp4",
+        "hls"
+      ],
+      "enabled": true,
+      "version": "3.9.2"
+    },
+    {
+      "id": "desitellybox-to",
+      "name": "DesiTellyBox.to",
+      "filename": "providers/desitellybox-to.js?v=3.9.2",
+      "mediaTypes": [
+        "tv"
+      ],
+      "formats": [
+        "mp4",
+        "hls"
+      ],
+      "enabled": true,
+      "version": "3.9.2"
+    },
+    {
+      "id": "tellynagari-com",
+      "name": "TellyNagari.com",
+      "filename": "providers/tellynagari-com.js?v=3.9.2",
+      "mediaTypes": [
+        "tv"
+      ],
+      "formats": [
+        "mp4",
+        "hls"
+      ],
+      "enabled": true,
+      "version": "3.9.2"
+    },
+    {
+      "id": "yodesi-net",
+      "name": "YoDesi.net",
+      "filename": "providers/yodesi-net.js?v=3.9.2",
+      "mediaTypes": [
+        "tv"
+      ],
+      "formats": [
+        "hls"
+      ],
+      "enabled": true,
+      "version": "3.9.2"
+    },
+    {
+      "id": "desiserials-su",
+      "name": "DesiSerials.su",
+      "filename": "providers/desiserials-su.js?v=3.9.2",
+      "mediaTypes": [
+        "tv"
+      ],
+      "formats": [
+        "mp4"
+      ],
+      "enabled": true,
+      "version": "3.9.2"
+    },
+    {
+      "id": "bollyzone-to",
+      "name": "Bollyzone.to",
+      "filename": "providers/bollyzone-to.js?v=3.9.2",
+      "mediaTypes": [
+        "tv"
+      ],
+      "formats": [
+        "hls"
+      ],
+      "enabled": true,
+      "version": "3.9.2"
     }
   ]
 }

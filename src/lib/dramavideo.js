@@ -1,174 +1,262 @@
-// DramaVideo resolver — dramavideo.se/watch → player.dramavideo.se → AES-CBC decrypt → HLS.
-// Flow:
-// 1. Fetch dramavideo.se/watch?v=... page
-// 2. Extract data-video and data-provider from <li class="linkserver">
-// 3. Fetch player.dramavideo.se/?id=...&sv=... WITH Referer header (404 without it)
-// 4. Extract encData (base64), keyHex, ivHex from inline JS
-// 5. AES-CBC decrypt via crypto.subtle (primary) or crypto-js (fallback)
-// 6. Parse decrypted HTML for JSON.parse(`[{file, type, label}]`) → HLS URL
+// DramaVideo resolver — supports both embed forms seen in the wild:
 //
-// HLS stream requires Referer: https://player.dramavideo.se/ for playback.
+//   A) apnetv.pro-style posts: <div class="server" data-sv-id="v3" data-embed="CODE">
+//      → player.dramavideo.se/in?id={embed}&sv={svId}
+//
+//   B) godesitvserials.com-style posts: data-a + data-b base64 halves that join into
+//      https://dramavideo.se/watch?v={id}; the watch page carries
+//      <li class="linkserver" data-provider="v3" data-video="CODE"> → same /in URL
+//
+//   /in page ends with a PLAINTEXT decrypt block:
+//      encData="..."; keyHex="..."; ivHex="..."  (AES-256-CBC, base64 ciphertext)
+//   Decrypted HTML contains  sources = JSON.parse(`[{file,type,label}]`)
+//   → https://hls.dramavideo.se/media/{hex} HLS (needs Origin: https://player.dramavideo.se)
+//
+// AES via crypto.subtle (available in Nuvio QuickJS); crypto-js fallback for envs
+// without WebCrypto.
 
-import { UA, BROWSER_HEADERS } from "./constants.js";
+import { UA } from "./constants.js";
 import { fetchText } from "./http.js";
-import { bytesToString, base64UrlToBytes } from "./filemoon.js";
+import { dedupeStreams } from "./html.js";
 
-var DRAMAVIDEO_WATCH_RE = /dramavideo\.se\/watch\?v=(\d+)/i;
-var PLAYER_HOST = "https://player.dramavideo.se/";
-var PLAYER_REFERER = "https://dramavideo.se/";
+var PLAYER_HOST = "https://player.dramavideo.se";
+var PLAYER_ORIGIN = PLAYER_HOST;
 
-// Check if a URL is a dramavideo.se/watch URL.
-export function isDramavideoUrl(url) {
-  return DRAMAVIDEO_WATCH_RE.test(String(url || ""));
+// Extract data-embed/data-sv-id (apnetv) or data-video/data-provider (linkserver li)
+// pairs from post/watch markup. Returns [{id, sv}].
+export function dramavideoParamsFromMarkup(markup) {
+  var text = String(markup || "");
+  var out = [];
+  var tagRe = /<(?:div|li|a|span|button)[^>]*data-(?:embed|video)="[^"]+"[^>]*>/gi;
+  var m;
+  while ((m = tagRe.exec(text)) !== null) {
+    var tag = m[0];
+    var idM = tag.match(/data-(?:embed|video)="([^"]+)"/i);
+    var svM = tag.match(/data-(?:sv-id|svid|provider)="([^"]+)"/i);
+    if (idM) {
+      out.push({ id: idM[1], sv: svM ? svM[1] : "v3" });
+    }
+  }
+  return out;
 }
 
-// Extract the watch?v= ID from a dramavideo.se URL.
-function extractWatchId(url) {
-  var match = String(url || "").match(DRAMAVIDEO_WATCH_RE);
-  return match ? match[1] : "";
+// godesitvserials: <... data-a="aHR0cHM6..." data-b="LnNlL3d..."> — base64 halves
+// joined into https://dramavideo.se/watch?v={id}
+export function dramavideoWatchUrlFromMarkup(markup) {
+  var text = String(markup || "");
+  var m = text.match(/data-a="([A-Za-z0-9+/=]{8,})"[^>]*data-b="([A-Za-z0-9+/=]{8,})"/i);
+  if (!m) {
+    m = text.match(/data-b="([A-Za-z0-9+/=]{8,})"[^>]*data-a="([A-Za-z0-9+/=]{8,})"/i);
+    if (!m) return "";
+    // swapped order in the tag — a is second capture
+    return decodeJoin(m[2], m[1]);
+  }
+  return decodeJoin(m[1], m[2]);
 }
 
-// Extract data-video and data-provider from the dramavideo.se/watch page.
-// The page has: <li class="linkserver" data-provider="v3" data-video="CODE">
-function extractServerAttrs(html) {
-  var text = String(html || "");
-  var liMatch = text.match(/<li[^>]*class="linkserver"[^>]*>/i);
-  if (!liMatch) return null;
-  var liTag = liMatch[0];
-  var videoMatch = liTag.match(/data-video="([^"]+)"/);
-  var providerMatch = liTag.match(/data-provider="([^"]+)"/);
-  if (!videoMatch || !providerMatch) return null;
-  return { videoId: videoMatch[1], provider: providerMatch[1] };
+function decodeJoin(a, b) {
+  var decoded = base64Decode(a) + base64Decode(b);
+  return /dramavideo\.se\/watch\?v=\d+/i.test(decoded) ? decoded : "";
 }
 
-// Hex string → Uint8Array (for crypto.subtle key/IV).
+function base64Decode(s) {
+  var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var clean = String(s || "").replace(/[^A-Za-z0-9+/=]/g, "");
+  var out = "";
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < clean.length; i++) {
+    var c = clean.charAt(i);
+    if (c === "=") break;
+    buffer = (buffer << 6) | chars.indexOf(c);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode((buffer >> bits) & 0xff);
+    }
+  }
+  return out;
+}
+
 function hexToBytes(hex) {
   var str = String(hex || "");
-  var bytes = [];
+  var bytes = new Uint8Array(str.length / 2);
   for (var i = 0; i < str.length; i += 2) {
-    bytes.push(parseInt(str.substr(i, 2), 16));
+    bytes[i / 2] = parseInt(str.substr(i, 2), 16);
   }
-  return new Uint8Array(bytes);
+  return bytes;
 }
 
-// Base64 → Uint8Array (standard base64, not base64url).
-function base64ToBytes(b64) {
-  // Convert to base64url format and reuse the filemoon helper
-  var b64url = String(b64 || "").replace(/\+/g, "-").replace(/\//g, "_");
-  return base64UrlToBytes(b64url);
+function extractCipher(markup) {
+  var text = String(markup || "");
+  var enc = text.match(/encData\s*=\s*"([^"]+)"/);
+  var key = text.match(/keyHex\s*=\s*"([0-9a-fA-F]+)"/);
+  var iv = text.match(/ivHex\s*=\s*"([0-9a-fA-F]+)"/);
+  if (!enc || !key || !iv) return null;
+  return { encData: enc[1], keyHex: key[1], ivHex: iv[1] };
 }
 
-// AES-CBC decrypt via crypto.subtle (Web Crypto API).
-// Returns Promise<string> — the decrypted plaintext.
-function aesCbcDecryptSubtle(encDataBase64, keyHex, ivHex) {
-  var subtle = (typeof crypto !== "undefined" && crypto.subtle) ||
-    (typeof globalThis !== "undefined" && globalThis.crypto && globalThis.crypto.subtle);
-  if (!subtle) return Promise.reject(new Error("crypto.subtle not available"));
+// Decrypted HTML carries sources = JSON.parse(`[{file,type,label}]`) plus a tracks array.
+function extractSources(decryptedHtml) {
+  var text = String(decryptedHtml || "");
+  var streams = [];
+  var m = text.match(/JSON\.parse\(`(\[[^`]*"file"[^`]*\])`\)/);
+  if (m) {
+    try {
+      var parsed = JSON.parse(m[1]);
+      if (Array.isArray(parsed)) {
+        parsed.forEach(function (s) {
+          if (s && s.file) {
+            streams.push({ url: s.file, kind: s.type === "mp4" ? "mp4" : "hls", label: s.label || "" });
+          }
+        });
+      }
+    } catch (e) {
+      /* fall through to regex */
+    }
+  }
+  if (streams.length === 0) {
+    var urls = text.match(/https:\/\/hls\.dramavideo\.se\/media\/[0-9a-f]+/gi) || [];
+    urls.forEach(function (u) {
+      streams.push({ url: u, kind: "hls", label: "" });
+    });
+  }
+  return streams;
+}
 
+function aesCbcDecrypt(encData, keyHex, ivHex) {
   var keyBytes = hexToBytes(keyHex);
   var ivBytes = hexToBytes(ivHex);
-  var ctBytes = base64ToBytes(encDataBase64);
+  var cipherBytes = Uint8Array.from(
+    atobBinary(encData).split("").map(function (c) { return c.charCodeAt(0); }),
+  );
 
-  return subtle.importKey("raw", keyBytes, { name: "AES-CBC" }, false, ["decrypt"])
-    .then(function (key) {
-      return subtle.decrypt({ name: "AES-CBC", iv: ivBytes }, key, ctBytes);
-    })
-    .then(function (decrypted) {
-      return bytesToString(new Uint8Array(decrypted));
-    });
-}
+  if (typeof crypto !== "undefined" && crypto.subtle && crypto.subtle.decrypt) {
+    return crypto.subtle
+      .importKey("raw", keyBytes, { name: "AES-CBC" }, false, ["decrypt"])
+      .then(function (key) {
+        return crypto.subtle.decrypt({ name: "AES-CBC", iv: ivBytes }, key, cipherBytes);
+      })
+      .then(function (plain) {
+        return u8ToString(new Uint8Array(plain));
+      });
+  }
 
-// AES-CBC decrypt via crypto-js (fallback if crypto.subtle unavailable).
-function aesCbcDecryptCryptoJS(encDataBase64, keyHex, ivHex) {
-  var CryptoJS = (typeof require === "function") ? require("crypto-js") : null;
-  if (!CryptoJS) return Promise.reject(new Error("crypto-js not available"));
-
-  var key = CryptoJS.enc.Hex.parse(keyHex);
-  var iv = CryptoJS.enc.Hex.parse(ivHex);
-  var cipherParams = CryptoJS.lib.CipherParams.create({
-    ciphertext: CryptoJS.enc.Base64.parse(encDataBase64),
-  });
-  var decrypted = CryptoJS.AES.decrypt(cipherParams, key, {
-    iv: iv,
-    mode: CryptoJS.mode.CBC,
-    padding: CryptoJS.pad.Pkcs7,
-  });
-  return Promise.resolve(decrypted.toString(CryptoJS.enc.Utf8));
-}
-
-// AES-CBC decrypt — tries crypto.subtle first, falls back to crypto-js.
-function aesCbcDecrypt(encDataBase64, keyHex, ivHex) {
-  return aesCbcDecryptSubtle(encDataBase64, keyHex, ivHex).catch(function () {
-    return aesCbcDecryptCryptoJS(encDataBase64, keyHex, ivHex);
-  });
-}
-
-// Parse decrypted HTML for video sources.
-// The decrypted HTML contains: JSON.parse(`[{file, type, label}]`)
-// Returns: [{file, type, label}]
-function parseDecryptedSources(html) {
-  var text = String(html || "");
-  var match = text.match(/JSON\.parse\(`(\[[^\]]+\])`\)/);
-  if (!match) return [];
+  // crypto-js fallback (available via require in the Nuvio sandbox)
   try {
-    return JSON.parse(match[1]);
+    var CryptoJS = require("crypto-js");
+    var keyWA = CryptoJS.enc.Hex.parse(keyHex);
+    var ivWA = CryptoJS.enc.Hex.parse(ivHex);
+    var params = CryptoJS.lib.CipherParams.create({
+      ciphertext: CryptoJS.enc.Base64.parse(encData),
+    });
+    var out = CryptoJS.AES.decrypt(params, keyWA, {
+      iv: ivWA,
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
+    });
+    return Promise.resolve(out.toString(CryptoJS.enc.Utf8));
   } catch (e) {
-    return [];
+    return Promise.reject(new Error("No AES implementation available"));
   }
 }
 
-// Fetch and decrypt the player page.
-// Returns Promise<string> — the decrypted HTML.
-function decryptPlayerPage(fetchImpl, videoId, provider) {
-  var playerUrl = PLAYER_HOST + "?id=" + videoId + "&sv=" + provider;
-  var headers = Object.assign({}, BROWSER_HEADERS, { Referer: PLAYER_REFERER });
+function atobBinary(s) {
+  var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var clean = String(s || "").replace(/[^A-Za-z0-9+/=]/g, "");
+  var out = "";
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < clean.length; i++) {
+    var c = clean.charAt(i);
+    if (c === "=") break;
+    buffer = (buffer << 6) | chars.indexOf(c);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode((buffer >> bits) & 0xff);
+    }
+  }
+  return out;
+}
 
+function u8ToString(u8) {
+  // UTF-8 decode without TextDecoder (not in vanilla QuickJS)
+  var out = "";
+  var i = 0;
+  while (i < u8.length) {
+    var b = u8[i];
+    if (b < 0x80) {
+      out += String.fromCharCode(b);
+      i += 1;
+    } else if (b < 0xe0) {
+      out += String.fromCharCode(((b & 0x1f) << 6) | (u8[i + 1] & 0x3f));
+      i += 2;
+    } else if (b < 0xf0) {
+      out += String.fromCharCode(
+        ((b & 0x0f) << 12) | ((u8[i + 1] & 0x3f) << 6) | (u8[i + 2] & 0x3f),
+      );
+      i += 3;
+    } else {
+      var cp =
+        ((b & 0x07) << 18) |
+        ((u8[i + 1] & 0x3f) << 12) |
+        ((u8[i + 2] & 0x3f) << 6) |
+        (u8[i + 3] & 0x3f);
+      cp -= 0x10000;
+      out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff));
+      i += 4;
+    }
+  }
+  return out;
+}
+
+// Fetch player page /in?id=...&sv=... and decrypt the sources array.
+export function resolveDramavideoEmbed(fetchImpl, id, sv, referer) {
+  var playerUrl = PLAYER_HOST + "/in?id=" + encodeURIComponent(id) + "&sv=" + encodeURIComponent(sv || "v3");
+  var headers = { "User-Agent": UA, Referer: referer || "https://dramavideo.se/" };
   return fetchText(fetchImpl, playerUrl, { headers: headers })
-    .then(function (html) {
-      if (!html) return null;
-      var encMatch = html.match(/encData="([^"]+)"/);
-      var keyMatch = html.match(/keyHex="([^"]+)"/);
-      var ivMatch = html.match(/ivHex="([^"]+)"/);
-      if (!encMatch || !keyMatch || !ivMatch) return null;
-      return aesCbcDecrypt(encMatch[1], keyMatch[1], ivMatch[1]);
+    .then(function (page) {
+      if (!page) return [];
+      var cipher = extractCipher(page);
+      if (!cipher) return [];
+      return aesCbcDecrypt(cipher.encData, cipher.keyHex, cipher.ivHex).then(function (decrypted) {
+        return extractSources(decrypted).map(function (s) {
+          s.backend = "dramavideo";
+          s.quality = s.label || "";
+          s.headers = {
+            "User-Agent": UA,
+            Referer: PLAYER_HOST + "/",
+            Origin: PLAYER_ORIGIN,
+          };
+          return s;
+        });
+      });
+    })
+    .catch(function (e) {
+      console.log("[DramaVideo] resolve failed: " + (e && e.message));
+      return [];
     });
 }
 
-// Resolve a dramavideo.se/watch?v=... URL to HLS streams.
-// Returns: Promise<Array<{url, quality, name, kind, sourceTag, headers}>>
-export function resolveDramavideoEmbed(fetchImpl, watchUrl) {
-  var watchId = extractWatchId(watchUrl);
-  if (!watchId) return Promise.resolve([]);
-
-  // Step 1: Fetch dramavideo.se/watch?v=... page
-  return fetchText(fetchImpl, watchUrl, { headers: BROWSER_HEADERS })
-    .then(function (html) {
-      if (!html) return [];
-      var attrs = extractServerAttrs(html);
-      if (!attrs) return [];
-
-      // Step 2: Fetch and decrypt player page
-      return decryptPlayerPage(fetchImpl, attrs.videoId, attrs.provider);
+// godesitvserials watch flow: watch URL → linkserver li → /in
+export function resolveDramavideoWatch(fetchImpl, watchUrl, referer) {
+  var headers = { "User-Agent": UA, Referer: referer || "https://dramavideo.se/" };
+  return fetchText(fetchImpl, watchUrl, { headers: headers })
+    .then(function (page) {
+      if (!page) return [];
+      var params = dramavideoParamsFromMarkup(page);
+      if (params.length === 0) return [];
+      return Promise.all(
+        params.slice(0, 3).map(function (p) {
+          return resolveDramavideoEmbed(fetchImpl, p.id, p.sv, watchUrl);
+        }),
+      ).then(function (sets) {
+        return dedupeStreams(sets.flat ? sets.flat() : [].concat.apply([], sets));
+      });
     })
-    .then(function (decryptedHtml) {
-      if (!decryptedHtml) return [];
-
-      // Step 3: Parse sources
-      var sources = parseDecryptedSources(decryptedHtml);
-      return sources
-        .filter(function (s) { return s.file && s.type === "hls"; })
-        .map(function (s) {
-          var qualityMatch = (s.label || "").match(/(\d{3,4})p?/i);
-          var quality = qualityMatch ? qualityMatch[1] + "p" : "720p";
-          return {
-            url: s.file,
-            quality: quality,
-            name: "DramaVideo",
-            kind: "hls",
-            sourceTag: "dramavideo",
-            headers: { Referer: PLAYER_HOST },
-          };
-        });
-    })
-    .catch(function () { return []; });
+    .catch(function (e) {
+      console.log("[DramaVideo] watch resolve failed: " + (e && e.message));
+      return [];
+    });
 }

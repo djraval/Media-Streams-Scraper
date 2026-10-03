@@ -16,12 +16,12 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/yodesionline-net/index.js
-var yodesionline_net_exports = {};
-__export(yodesionline_net_exports, {
+// src/desitellybox-to/index.js
+var desitellybox_to_exports = {};
+__export(desitellybox_to_exports, {
   getStreams: () => getStreams
 });
-module.exports = __toCommonJS(yodesionline_net_exports);
+module.exports = __toCommonJS(desitellybox_to_exports);
 
 // src/lib/constants.js
 var TMDB_BASE = "https://api.themoviedb.org/3";
@@ -1345,22 +1345,15 @@ function chainProvider(cfg) {
   return { getStreams: getStreams2, getStreamsForRequest };
 }
 
-// src/yodesionline-net/index.js
+// src/desitellybox-to/index.js
 var provider = chainProvider({
-  name: "YoDesiOnline.net",
-  siteBase: "https://yodesionline.net",
+  name: "DesiTellyBox",
+  siteBase: "https://www.desitellybox.to",
   searchPath: "/?s=",
-  hostRe: /^https:\/\/(?:www\.)?yodesionline\.net\//i,
+  hostRe: /^https:\/\/(?:www\.)?desitellybox\.to\//i,
+  nonPostRe: /\/(category|tag|author|page|wp-|feed|xmlrpc|comments)\b|\/20\d{2}(?:\/\d{2})?\/?$|\/(about-us|contact|dmca|privacy-policy|terms)/i,
   stripTrailingS: true,
-  mediaTypes: ["tv"],
-  postUrls: function(request, slugs) {
-    var dateSlug = episodeDateSlug(request.airDate);
-    if (!dateSlug)
-      return [];
-    return slugs.map(function(slug) {
-      return "https://yodesionline.net/" + slug + "-" + dateSlug + "-full-episode/";
-    });
-  }
+  mediaTypes: ["tv"]
 });
 function getStreams(tmdbId, mediaType, season, episode) {
   return provider.getStreams(tmdbId, mediaType, season, episode);

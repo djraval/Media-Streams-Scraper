@@ -16,12 +16,12 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/yodesionline-net/index.js
-var yodesionline_net_exports = {};
-__export(yodesionline_net_exports, {
+// src/desiserials-su/index.js
+var desiserials_su_exports = {};
+__export(desiserials_su_exports, {
   getStreams: () => getStreams
 });
-module.exports = __toCommonJS(yodesionline_net_exports);
+module.exports = __toCommonJS(desiserials_su_exports);
 
 // src/lib/constants.js
 var TMDB_BASE = "https://api.themoviedb.org/3";
@@ -1345,21 +1345,104 @@ function chainProvider(cfg) {
   return { getStreams: getStreams2, getStreamsForRequest };
 }
 
-// src/yodesionline-net/index.js
+// src/desiserials-su/index.js
+var SITE_HOST_RE = /^https:\/\/(?:www\.)?desiserials\.su\//i;
+var POST_RE = /^\/[a-z0-9-]+-(?:1st|2nd|3rd|\d+th)-[a-z]+-\d{4}-full-episode-[a-z-]+\/[a-f0-9]{14,}\/?$/i;
+var GETLINK_RE = /getlink\.php\?/i;
+var META_BASE = "https://dstshndisk.showdetails.org/hls/";
+var MONTH_IDX = {
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11
+};
 var provider = chainProvider({
-  name: "YoDesiOnline.net",
-  siteBase: "https://yodesionline.net",
-  searchPath: "/?s=",
-  hostRe: /^https:\/\/(?:www\.)?yodesionline\.net\//i,
-  stripTrailingS: true,
+  name: "DesiSerials",
+  siteBase: "https://www.desiserials.su",
   mediaTypes: ["tv"],
-  postUrls: function(request, slugs) {
-    var dateSlug = episodeDateSlug(request.airDate);
-    if (!dateSlug)
-      return [];
-    return slugs.map(function(slug) {
-      return "https://yodesionline.net/" + slug + "-" + dateSlug + "-full-episode/";
+  // getlink.php?v={t1}&part2={t2}&part3={t3}&type=... → one media_meta URL
+  // per part token. The getlink URL itself is never fetched.
+  transforms: [
+    {
+      match: GETLINK_RE,
+      expand: function(_m, url) {
+        var query = url.slice(url.indexOf("?") + 1);
+        var params = {};
+        query.split("&").forEach(function(kv) {
+          var eq = kv.indexOf("=");
+          if (eq > 0)
+            params[kv.slice(0, eq)] = kv.slice(eq + 1);
+        });
+        return ["v", "part2", "part3", "part4"].filter(function(key) {
+          return params[key];
+        }).map(function(key) {
+          return META_BASE + "media_meta.php?v=" + encodeURIComponent(params[key]) + "&type=player";
+        });
+      }
+    }
+  ],
+  // ?s= on this site returns the latest posts, not a real search — the
+  // per-show category page is the real listing.
+  searchUrls: function(_request, slugs) {
+    return slugs.slice(0, 4).map(function(slug) {
+      return "https://www.desiserials.su/category/" + slug + "/";
     });
+  },
+  // Category listings link to posts shaped as
+  // /{show}-{ordinal}-{month}-{year}-full-episode-{channel}/{hashid}/ —
+  // match by shape + slug, then prefer the post whose slug date matches the
+  // requested air date (else newest dated post).
+  postCandidates: function(markup, request) {
+    var hrefs = links(markup).map(function(href) {
+      return href.indexOf("http") !== 0 && href.charAt(0) === "/" ? "https://www.desiserials.su" + href : href;
+    });
+    var slugVariants = (request.slugCandidates || []).map(function(s) {
+      return s.toLowerCase();
+    });
+    var candidates = dedupe(
+      hrefs.filter(function(href) {
+        var path = href.replace(SITE_HOST_RE, "/");
+        if (!POST_RE.test(path))
+          return false;
+        var lower = href.toLowerCase();
+        return slugVariants.some(function(slug) {
+          return lower.indexOf(slug) !== -1;
+        });
+      })
+    );
+    if (candidates.length === 0)
+      return [];
+    if (request.airDate) {
+      var dm = String(request.airDate).toLowerCase().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (dm) {
+        var MONTHS2 = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+        var ord = Number(dm[3]) + ({ 1: "st", 2: "nd", 3: "rd" }[Number(dm[3]) % 10] || "th") + "-" + MONTHS2[Number(dm[2]) - 1] + "-" + dm[1];
+        var exact = candidates.filter(function(h) {
+          return h.toLowerCase().indexOf(ord) !== -1;
+        });
+        return exact;
+      }
+      return [];
+    }
+    var best = 0;
+    var bestTs = 0;
+    candidates.forEach(function(h, i) {
+      var m = h.toLowerCase().match(/(\d{1,2})(?:st|nd|rd|th)-([a-z]+)-(\d{4})/);
+      var ts = m ? Date.UTC(Number(m[3]), MONTH_IDX[m[2]] !== void 0 ? MONTH_IDX[m[2]] : 0, Number(m[1])) : 0;
+      if (ts > bestTs) {
+        bestTs = ts;
+        best = i;
+      }
+    });
+    return bestTs ? [candidates[best]] : [];
   }
 });
 function getStreams(tmdbId, mediaType, season, episode) {

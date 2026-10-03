@@ -32,15 +32,10 @@ var CHANNEL_SLUGS = {
   "starplus": ["star-plus"],
   "zee tv": ["zee-tv"]
 };
-var VKSPEED_HOSTS = ["vkspeed.com", "vkcdn5.com", "vkcdn6.com", "vkcdn7.com"];
-var VKPRIME_HOSTS = ["vkprime.com"];
 
 // src/lib/http.js
 function resolveFetch(options) {
   return options && options.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
-}
-function browserHeaders(referer) {
-  return { headers: Object.assign({}, BROWSER_HEADERS, { Referer: referer }) };
 }
 function fetchText(fetchImpl, url, options) {
   return fetchImpl(url, options || {}).then(function(response) {
@@ -121,28 +116,6 @@ function dedupeStreams(streams) {
   }
   return out;
 }
-function isPlaceholderUrl(url) {
-  var lower = String(url || "").toLowerCase();
-  return lower.indexOf("/ads/") !== -1 || lower.indexOf("127.0.0.1") !== -1;
-}
-function embedHostRegex(hosts, pathPattern) {
-  var escaped = hosts.map(function(h) {
-    return h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  });
-  return new RegExp(
-    "^https://(?:www\\.)?(?:" + escaped.join("|") + ")/" + pathPattern + "$",
-    "i"
-  );
-}
-function nextUriLine(lines, from) {
-  for (var j = from; j < lines.length; j += 1) {
-    var line = lines[j].trim();
-    if (line && line.charAt(0) !== "#") {
-      return line;
-    }
-  }
-  return "";
-}
 function decodeText(raw) {
   var text = String(raw || "").replace(/&amp;/gi, "&").replace(/&#038;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
   var replacements = [
@@ -160,25 +133,6 @@ function decodeText(raw) {
     text = text.replace(replacements[i][0], replacements[i][1]);
   }
   return text.replace(/&amp;/gi, "&").replace(/&#038;/gi, "&");
-}
-function mediaCandidates(raw, extension) {
-  var text = decodeText(raw);
-  var pattern = new RegExp(
-    `https?://[^\\s'\\"<>\\\\,}\\]]+\\.` + extension.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + `(?:\\?[^\\s'\\"<>\\\\}\\]]*)?`,
-    "gi"
-  );
-  var matches = [];
-  var m;
-  while ((m = pattern.exec(text)) !== null) {
-    matches.push(m[0].replace(/[.;)]+$/g, ""));
-  }
-  return dedupe(matches);
-}
-function mp4Candidates(raw) {
-  return mediaCandidates(raw, "mp4");
-}
-function m3u8Candidates(raw) {
-  return mediaCandidates(raw, "m3u8");
 }
 function attrValues(markup, tags, attrs) {
   var tagAlternation = tags.join("|");
@@ -201,24 +155,6 @@ function attrValues(markup, tags, attrs) {
 }
 function links(markup) {
   return attrValues(markup, ["a", "link", "area"], ["href"]);
-}
-function iframeSrcCandidates(markup) {
-  return dedupe(
-    attrValues(markup, ["iframe"], [
-      "src",
-      "data-src",
-      "data-wpfc-original-src",
-      "data-lazy-src",
-      "data-litespeed-src"
-    ])
-  );
-}
-function resolveRelativeUrl(baseUrl, relative) {
-  try {
-    return new URL(relative, baseUrl).toString();
-  } catch (e) {
-    return relative;
-  }
 }
 
 // src/lib/tmdb.js
@@ -496,138 +432,6 @@ function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVariants) {
   return [];
 }
 
-// src/lib/packer.js
-var B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-function decodeBase64(raw) {
-  var input = String(raw || "").replace(/[^A-Za-z0-9+/]/g, "");
-  var output = "";
-  var buffer = 0;
-  var bits = 0;
-  for (var i = 0; i < input.length; i++) {
-    var idx = B64_CHARS.indexOf(input.charAt(i));
-    if (idx === -1) {
-      continue;
-    }
-    buffer = buffer << 6 | idx;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      output += String.fromCharCode(buffer >> bits & 255);
-    }
-  }
-  return output;
-}
-function packerEncode(n, base) {
-  if (n === 0)
-    return "0";
-  var out = "";
-  var value = n;
-  while (value > 0) {
-    var r = value % base;
-    if (r < 10) {
-      out = String.fromCharCode(48 + r) + out;
-    } else if (r < 36) {
-      out = String.fromCharCode(87 + r) + out;
-    } else {
-      out = String.fromCharCode(29 + r) + out;
-    }
-    value = Math.floor(value / base);
-  }
-  return out;
-}
-function unpack(blob) {
-  var match = String(blob || "").match(
-    /eval\(function\(p,a,c,k,e,(?:d|r)\).*?\}\s*\(\s*'(.*?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'(.*?)'\.split\('\|'\)/s
-  );
-  if (!match)
-    return "";
-  var out = match[1].replace(/\\'/g, "'");
-  var base = Number(match[2]);
-  var count = Number(match[3]);
-  var keys = match[4].replace(/\\'/g, "'").split("|");
-  for (var i = count - 1; i >= 0; i -= 1) {
-    if (!keys[i])
-      continue;
-    var token = packerEncode(i, base).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp("\\b" + token + "\\b", "g"), keys[i]);
-  }
-  return out;
-}
-function decodeJuicyCodes(html) {
-  var match = String(html || "").match(/JuicyCodes\.Run\(([^)]+)\)/s);
-  if (!match) {
-    return "";
-  }
-  var fragments = match[1].match(/"([^"]*)"|'([^']*)'/g);
-  if (!fragments) {
-    return "";
-  }
-  var payload = "";
-  for (var i = 0; i < fragments.length; i++) {
-    payload += fragments[i].replace(/^["']|["']$/g, "");
-  }
-  return unpack(decodeBase64(payload));
-}
-
-// src/lib/vkplayer.js
-function qualityNearUrl(text, url) {
-  var index = text.indexOf(url);
-  if (index === -1)
-    return 0;
-  var before = text.substring(Math.max(0, index - 80), index);
-  var after = text.substring(index, index + 120);
-  var matches = (before + after).match(/(\d{3,4})p?/gi) || [];
-  if (matches.length === 0)
-    return 0;
-  return Number(matches[matches.length - 1]);
-}
-function jwPlayerSourceQualities(raw) {
-  var text = decodeText(raw);
-  var map = /* @__PURE__ */ new Map();
-  var re = /\{\s*(?:file|src)\s*:\s*["']([^"']+)["']\s*,\s*(?:label|quality|res)\s*:\s*["']?(\d{3,4})p?["']?\s*[^}]*\}/gi;
-  var m;
-  while ((m = re.exec(text)) !== null) {
-    map.set(m[1], Number(m[2]));
-  }
-  var re2 = /\{\s*(?:label|quality|res)\s*:\s*["']?(\d{3,4})p?["']?\s*,\s*(?:file|src)\s*:\s*["']([^"']+)["']\s*[^}]*\}/gi;
-  while ((m = re2.exec(text)) !== null) {
-    if (!map.has(m[2])) {
-      map.set(m[2], Number(m[1]));
-    }
-  }
-  return map;
-}
-function rankedMp4Candidates(raw) {
-  var text = decodeText(raw);
-  var jwMap = jwPlayerSourceQualities(raw);
-  return mp4Candidates(text).map(function(url) {
-    return { url, quality: jwMap.get(url) || qualityNearUrl(text, url) || 0 };
-  }).sort(function(a, b) {
-    return b.quality - a.quality;
-  });
-}
-function resolveVkPlayer(embedUrl, refererUrl, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  return fetchText(fetchImpl, embedUrl, browserHeaders(refererUrl)).then(function(playerHtml) {
-    if (!playerHtml)
-      return [];
-    var decoded = unpack(playerHtml);
-    var payload = [playerHtml, decoded].filter(Boolean).join("\n");
-    var sources = rankedMp4Candidates(payload);
-    return sources.map(function(src) {
-      return {
-        url: src.url,
-        quality: "unknown",
-        kind: "mp4",
-        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
-      };
-    });
-  }).catch(function() {
-    return [];
-  });
-}
-
 // src/lib/format.js
 function formatBytes(bytes) {
   var value = Number(bytes);
@@ -718,55 +522,230 @@ function toNuvioStream(request, stream) {
   };
 }
 
-// src/desi-serials-to/index.js
-var SITE_BASE = "https://www.desi-serials.to";
-var SEARCH_PATH = "/?s=";
-var WATCH_PATH = "/watch-online/";
-var ARCHIVE_PAGE_PATH = "page/";
-var TVARTICLES_HOST = "tvarticles.org";
-var FLOW_HOSTS = ["flow.tvlogy.to"];
-var DESI_SERIALS_HOST_RE = new RegExp(
-  "^https://(?:www\\.)?desi-serials\\.to/",
-  "i"
-);
-var TVARTICLES_RE = new RegExp(
-  "^https://" + TVARTICLES_HOST.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/vidd\\.php\\?id=\\d+",
-  "i"
-);
-var VKPRIME_RE = embedHostRegex(VKPRIME_HOSTS, "embed-[A-Za-z0-9-]+\\.html");
-var VKSPEED_RE = embedHostRegex(VKSPEED_HOSTS, "embed-[A-Za-z0-9-]+\\.html");
-var FLOW_RE = embedHostRegex(FLOW_HOSTS, "[A-Za-z0-9/_-]+/?");
-function providerDisplayName(stream) {
-  var backend = String(stream.backend || "source").replace(/(^|[-_\s]+)([a-z])/g, function(_match, prefix, ch) {
-    return prefix + ch.toUpperCase();
-  }).replace(/[-_]+/g, "");
-  var name = "Desi-Serials.to " + backend;
-  if (stream.sourceTag) {
-    name += " (" + stream.sourceTag + ")";
-  }
-  return name;
-}
-var FALLBACK_ARCHIVE_CHANNELS = ["zee-tv", "sony-tv", "star-plus", "color-tv-hd", "sab-tv-hd"];
-var FALLBACK_ARCHIVE_PAGES = 1;
-var MAPPED_ARCHIVE_PAGES = 3;
-function buildCandidateUrls(request) {
-  var mapped = request.networkCandidates && request.networkCandidates.length > 0;
-  var channels = mapped ? request.networkCandidates : FALLBACK_ARCHIVE_CHANNELS;
-  var pages = mapped ? MAPPED_ARCHIVE_PAGES : FALLBACK_ARCHIVE_PAGES;
-  var urls = [];
-  for (var i = 0; i < channels.length; i++) {
-    var channel = channels[i];
-    var slugs = (request.slugCandidates || []).slice(0, 2);
-    for (var j = 0; j < slugs.length; j++) {
-      var slug = slugs[j];
-      urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/");
-      for (var p = 2; p <= pages; p++) {
-        urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/" + ARCHIVE_PAGE_PATH + p + "/");
-      }
+// src/lib/dramavideo.js
+var PLAYER_HOST = "https://player.dramavideo.se";
+var PLAYER_ORIGIN = PLAYER_HOST;
+function dramavideoParamsFromMarkup(markup) {
+  var text = String(markup || "");
+  var out = [];
+  var tagRe = /<(?:div|li|a|span|button)[^>]*data-(?:embed|video)="[^"]+"[^>]*>/gi;
+  var m;
+  while ((m = tagRe.exec(text)) !== null) {
+    var tag = m[0];
+    var idM = tag.match(/data-(?:embed|video)="([^"]+)"/i);
+    var svM = tag.match(/data-(?:sv-id|svid|provider)="([^"]+)"/i);
+    if (idM) {
+      out.push({ id: idM[1], sv: svM ? svM[1] : "v3" });
     }
   }
-  return { desiSerials: dedupe(urls) };
+  return out;
 }
+function dramavideoWatchUrlFromMarkup(markup) {
+  var text = String(markup || "");
+  var m = text.match(/data-a="([A-Za-z0-9+/=]{8,})"[^>]*data-b="([A-Za-z0-9+/=]{8,})"/i);
+  if (!m) {
+    m = text.match(/data-b="([A-Za-z0-9+/=]{8,})"[^>]*data-a="([A-Za-z0-9+/=]{8,})"/i);
+    if (!m)
+      return "";
+    return decodeJoin(m[2], m[1]);
+  }
+  return decodeJoin(m[1], m[2]);
+}
+function decodeJoin(a, b) {
+  var decoded = base64Decode(a) + base64Decode(b);
+  return /dramavideo\.se\/watch\?v=\d+/i.test(decoded) ? decoded : "";
+}
+function base64Decode(s) {
+  var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var clean = String(s || "").replace(/[^A-Za-z0-9+/=]/g, "");
+  var out = "";
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < clean.length; i++) {
+    var c = clean.charAt(i);
+    if (c === "=")
+      break;
+    buffer = buffer << 6 | chars.indexOf(c);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode(buffer >> bits & 255);
+    }
+  }
+  return out;
+}
+function hexToBytes(hex) {
+  var str = String(hex || "");
+  var bytes = new Uint8Array(str.length / 2);
+  for (var i = 0; i < str.length; i += 2) {
+    bytes[i / 2] = parseInt(str.substr(i, 2), 16);
+  }
+  return bytes;
+}
+function extractCipher(markup) {
+  var text = String(markup || "");
+  var enc = text.match(/encData\s*=\s*"([^"]+)"/);
+  var key = text.match(/keyHex\s*=\s*"([0-9a-fA-F]+)"/);
+  var iv = text.match(/ivHex\s*=\s*"([0-9a-fA-F]+)"/);
+  if (!enc || !key || !iv)
+    return null;
+  return { encData: enc[1], keyHex: key[1], ivHex: iv[1] };
+}
+function extractSources(decryptedHtml) {
+  var text = String(decryptedHtml || "");
+  var streams = [];
+  var m = text.match(/JSON\.parse\(`(\[[^`]*"file"[^`]*\])`\)/);
+  if (m) {
+    try {
+      var parsed = JSON.parse(m[1]);
+      if (Array.isArray(parsed)) {
+        parsed.forEach(function(s) {
+          if (s && s.file) {
+            streams.push({ url: s.file, kind: s.type === "mp4" ? "mp4" : "hls", label: s.label || "" });
+          }
+        });
+      }
+    } catch (e) {
+    }
+  }
+  if (streams.length === 0) {
+    var urls = text.match(/https:\/\/hls\.dramavideo\.se\/media\/[0-9a-f]+/gi) || [];
+    urls.forEach(function(u) {
+      streams.push({ url: u, kind: "hls", label: "" });
+    });
+  }
+  return streams;
+}
+function aesCbcDecrypt(encData, keyHex, ivHex) {
+  var keyBytes = hexToBytes(keyHex);
+  var ivBytes = hexToBytes(ivHex);
+  var cipherBytes = Uint8Array.from(
+    atobBinary(encData).split("").map(function(c) {
+      return c.charCodeAt(0);
+    })
+  );
+  if (typeof crypto !== "undefined" && crypto.subtle && crypto.subtle.decrypt) {
+    return crypto.subtle.importKey("raw", keyBytes, { name: "AES-CBC" }, false, ["decrypt"]).then(function(key) {
+      return crypto.subtle.decrypt({ name: "AES-CBC", iv: ivBytes }, key, cipherBytes);
+    }).then(function(plain) {
+      return u8ToString(new Uint8Array(plain));
+    });
+  }
+  try {
+    var CryptoJS = require("crypto-js");
+    var keyWA = CryptoJS.enc.Hex.parse(keyHex);
+    var ivWA = CryptoJS.enc.Hex.parse(ivHex);
+    var params = CryptoJS.lib.CipherParams.create({
+      ciphertext: CryptoJS.enc.Base64.parse(encData)
+    });
+    var out = CryptoJS.AES.decrypt(params, keyWA, {
+      iv: ivWA,
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7
+    });
+    return Promise.resolve(out.toString(CryptoJS.enc.Utf8));
+  } catch (e) {
+    return Promise.reject(new Error("No AES implementation available"));
+  }
+}
+function atobBinary(s) {
+  var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var clean = String(s || "").replace(/[^A-Za-z0-9+/=]/g, "");
+  var out = "";
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < clean.length; i++) {
+    var c = clean.charAt(i);
+    if (c === "=")
+      break;
+    buffer = buffer << 6 | chars.indexOf(c);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += String.fromCharCode(buffer >> bits & 255);
+    }
+  }
+  return out;
+}
+function u8ToString(u8) {
+  var out = "";
+  var i = 0;
+  while (i < u8.length) {
+    var b = u8[i];
+    if (b < 128) {
+      out += String.fromCharCode(b);
+      i += 1;
+    } else if (b < 224) {
+      out += String.fromCharCode((b & 31) << 6 | u8[i + 1] & 63);
+      i += 2;
+    } else if (b < 240) {
+      out += String.fromCharCode(
+        (b & 15) << 12 | (u8[i + 1] & 63) << 6 | u8[i + 2] & 63
+      );
+      i += 3;
+    } else {
+      var cp = (b & 7) << 18 | (u8[i + 1] & 63) << 12 | (u8[i + 2] & 63) << 6 | u8[i + 3] & 63;
+      cp -= 65536;
+      out += String.fromCharCode(55296 + (cp >> 10), 56320 + (cp & 1023));
+      i += 4;
+    }
+  }
+  return out;
+}
+function resolveDramavideoEmbed(fetchImpl, id, sv, referer) {
+  var playerUrl = PLAYER_HOST + "/in?id=" + encodeURIComponent(id) + "&sv=" + encodeURIComponent(sv || "v3");
+  var headers = { "User-Agent": UA, Referer: referer || "https://dramavideo.se/" };
+  return fetchText(fetchImpl, playerUrl, { headers }).then(function(page) {
+    if (!page)
+      return [];
+    var cipher = extractCipher(page);
+    if (!cipher)
+      return [];
+    return aesCbcDecrypt(cipher.encData, cipher.keyHex, cipher.ivHex).then(function(decrypted) {
+      return extractSources(decrypted).map(function(s) {
+        s.backend = "dramavideo";
+        s.quality = s.label || "";
+        s.headers = {
+          "User-Agent": UA,
+          Referer: PLAYER_HOST + "/",
+          Origin: PLAYER_ORIGIN
+        };
+        return s;
+      });
+    });
+  }).catch(function(e) {
+    console.log("[DramaVideo] resolve failed: " + (e && e.message));
+    return [];
+  });
+}
+function resolveDramavideoWatch(fetchImpl, watchUrl, referer) {
+  var headers = { "User-Agent": UA, Referer: referer || "https://dramavideo.se/" };
+  return fetchText(fetchImpl, watchUrl, { headers }).then(function(page) {
+    if (!page)
+      return [];
+    var params = dramavideoParamsFromMarkup(page);
+    if (params.length === 0)
+      return [];
+    return Promise.all(
+      params.slice(0, 3).map(function(p) {
+        return resolveDramavideoEmbed(fetchImpl, p.id, p.sv, watchUrl);
+      })
+    ).then(function(sets) {
+      return dedupeStreams(sets.flat ? sets.flat() : [].concat.apply([], sets));
+    });
+  }).catch(function(e) {
+    console.log("[DramaVideo] watch resolve failed: " + (e && e.message));
+    return [];
+  });
+}
+
+// src/godesitvserials-com/index.js
+var SITE_BASE = "https://godesitvserials.com";
+var SEARCH_PATH = "/?s=";
+var TOKEN_API = SITE_BASE + "/api/token.php";
+var SITE_HOST_RE = /^https:\/\/(?:www\.)?godesitvserials\.com\//i;
+var PLAYER_SLUG_RE = /godesiserials\.blogspot\.com\/p\/player\.html\?slug=([A-Za-z0-9-]+)/i;
+var CATEGORY_RE = /\/category\//i;
 function buildSearchUrls(request) {
   var dateSlug = episodeDateSlug(request.airDate);
   var slugs = (request.slugCandidates || []).slice(0, 2);
@@ -784,265 +763,160 @@ function buildSearchUrls(request) {
   return dedupe(urls);
 }
 function episodePageCandidates(markup, request) {
-  return episodePostCandidates(links(markup), request, DESI_SERIALS_HOST_RE);
+  return episodePostCandidates(links(markup), request, SITE_HOST_RE, CATEGORY_RE);
 }
-function tvarticlesLinks(markup) {
-  return dedupe(
-    links(markup).filter(function(href) {
-      return TVARTICLES_RE.test(href);
-    })
-  );
+function playerSlugFromPost(markup) {
+  var m = String(markup || "").match(PLAYER_SLUG_RE);
+  return m ? m[1] : "";
 }
-function findPlayerIframe(markup) {
-  return iframeSrcCandidates(markup).find(function(href) {
-    return VKPRIME_RE.test(href) || VKSPEED_RE.test(href) || FLOW_RE.test(href);
-  }) || "";
+function streamForToken(source, token, referer) {
+  var headers = { "User-Agent": UA, Referer: referer };
+  switch (String(source || "megaplays").toLowerCase()) {
+    case "megaplays":
+      return {
+        backend: "megaplays",
+        kind: "mp4",
+        url: "https://proxy.megaplays.se/?t=" + token,
+        headers
+      };
+    case "yandex":
+      return {
+        backend: "yandex",
+        kind: "hls",
+        url: "https://streaming.disk.yandex.net/hls/" + token,
+        headers
+      };
+    default:
+      return null;
+  }
 }
-function resolveVkPlayerAdapter(embedUrl, refererUrl, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  return resolveVkPlayer(embedUrl, refererUrl, { fetchImpl }).then(function(sources) {
-    if (!sources || sources.length === 0) {
+function resolveViaTokenApi(fetchImpl, slug, postUrl) {
+  return fetchJson(fetchImpl, TOKEN_API + "?slug=" + encodeURIComponent(slug)).then(function(data) {
+    if (!data || !data.token)
+      return null;
+    var stream = streamForToken(data.source, data.token, postUrl);
+    if (!stream) {
+      console.log(
+        "[GoDesiTVSerials] unsupported token source '" + data.source + "' for " + postUrl
+      );
       return null;
     }
-    var real = sources.filter(function(entry) {
-      return !isPlaceholderUrl(entry.url);
-    });
-    if (real.length === 0) {
-      return null;
+    stream.size = "";
+    stream.sizeBytes = 0;
+    if (stream.kind === "mp4") {
+      return fetchContentLength(fetchImpl, stream.url, stream.headers).then(
+        function(sizeBytes) {
+          stream.size = formatBytes(sizeBytes);
+          stream.sizeBytes = sizeBytes;
+          return stream;
+        }
+      );
     }
-    var best = real[0];
-    var headers = { Referer: embedUrl, "User-Agent": UA };
-    var backend = embedUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime";
-    var stream = {
-      backend,
-      kind: "mp4",
-      quality: best.quality || "unknown",
-      url: best.url,
-      size: "",
-      sizeBytes: 0,
-      duration: 0,
-      sourceTag: "",
-      headers
-    };
-    return fetchContentLength(fetchImpl, best.url, headers).then(function(sizeBytes) {
-      stream.size = formatBytes(sizeBytes);
-      stream.sizeBytes = sizeBytes;
-      return stream;
-    });
+    return stream;
   });
 }
-function hlsQualityFromManifest(raw) {
-  var matches = String(raw || "").matchAll(/RESOLUTION=\d+x(\d{3,4})/gi);
-  var max = 0;
-  for (var m of matches) {
-    var height = Number(m[1]);
-    if (height > max) {
-      max = height;
-    }
-  }
-  return max > 0 ? max + "p" : "unknown";
-}
-function parseHlsMasterPlaylist(raw, baseUrl) {
-  var variants = [];
-  var lines = String(raw || "").split("\n");
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i].trim();
-    if (line.startsWith("#EXT-X-STREAM-INF:")) {
-      var resMatch = line.match(/RESOLUTION=\d+x(\d+)/i);
-      var avgBwMatch = line.match(/AVERAGE-BANDWIDTH=(\d+)/i);
-      var bwMatch = line.match(/BANDWIDTH=(\d+)/i);
-      var height = resMatch ? Number(resMatch[1]) : 0;
-      var bandwidth = avgBwMatch ? Number(avgBwMatch[1]) : bwMatch ? Number(bwMatch[1]) : 0;
-      if (bandwidth > 1e8) {
-        bandwidth = Math.round(bandwidth / 1e3);
-        if (bandwidth > 1e8)
-          bandwidth = 0;
-      }
-      var urlLine = nextUriLine(lines, i + 1);
-      if (urlLine) {
-        variants.push({
-          url: resolveRelativeUrl(baseUrl, urlLine),
-          height,
-          bandwidth
-        });
-      }
-    }
-  }
-  variants.sort(function(a, b) {
-    return (b.height || b.bandwidth) - (a.height || a.bandwidth);
-  });
-  return variants;
-}
-function flowVariantLabel(url) {
-  var match = String(url || "").match(/flow\.tvlogy\.to\/([a-z0-9]+)\//i);
-  if (!match) {
-    return "";
-  }
-  var variant = match[1].toLowerCase();
-  if (variant.startsWith("embed")) {
-    return "embed";
-  }
-  if (variant.startsWith("plyr")) {
-    return "plyr";
-  }
-  if (variant.startsWith("nflix")) {
-    return "nflix";
-  }
-  return variant;
-}
-function buildFlowStream(quality, size, duration, playerUrl, streamHeaders, url) {
-  return {
-    backend: "flow",
-    kind: "hls",
-    quality,
-    url,
-    size,
-    duration,
-    sourceTag: flowVariantLabel(playerUrl),
-    headers: streamHeaders
-  };
-}
-function resolveFlowPlayer(playerUrl, refererUrl, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  var streamHeaders = { Referer: playerUrl, "User-Agent": UA };
-  return fetchText(fetchImpl, playerUrl, browserHeaders(refererUrl)).then(function(player) {
-    if (!player) {
-      return null;
-    }
-    var directCandidates = m3u8Candidates(player);
-    var decodedCandidates = m3u8Candidates(decodeJuicyCodes(player));
-    var masterUrl = directCandidates[0] || decodedCandidates[0] || "";
-    if (!masterUrl) {
-      return null;
-    }
-    return fetchText(fetchImpl, masterUrl, browserHeaders(playerUrl)).then(function(manifest) {
-      var variants = parseHlsMasterPlaylist(manifest, masterUrl);
-      var quality = variants.length > 0 && variants[0].height > 0 ? variants[0].height + "p" : hlsQualityFromManifest(manifest);
-      var stream = buildFlowStream(quality, "", 0, playerUrl, streamHeaders, masterUrl);
-      stream.bandwidth = variants.length > 0 ? variants[0].bandwidth : 0;
-      return stream;
+function resolveViaDramavideo(fetchImpl, post, postUrl) {
+  var watchUrl = dramavideoWatchUrlFromMarkup(post);
+  if (!watchUrl)
+    return Promise.resolve([]);
+  return resolveDramavideoWatch(fetchImpl, watchUrl, postUrl).then(function(streams) {
+    return streams.map(function(s) {
+      s.size = "";
+      s.sizeBytes = 0;
+      return s;
     });
   });
 }
-function resolveTvarticlesPage(tvarticlesUrl, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  return fetchText(fetchImpl, tvarticlesUrl, { headers: BROWSER_HEADERS }).then(function(page) {
-    if (!page) {
-      return null;
+function resolveEpisodeUrl(fetchImpl, postUrl) {
+  return fetchText(fetchImpl, postUrl, { headers: BROWSER_HEADERS }).then(function(post) {
+    if (!post)
+      return [];
+    var jobs = [];
+    var slug = playerSlugFromPost(post);
+    if (slug) {
+      jobs.push(resolveViaTokenApi(fetchImpl, slug, postUrl));
     }
-    var iframeUrl = findPlayerIframe(page);
-    if (!iframeUrl) {
-      return null;
-    }
-    if (VKPRIME_RE.test(iframeUrl) || VKSPEED_RE.test(iframeUrl)) {
-      return resolveVkPlayerAdapter(iframeUrl, tvarticlesUrl, { fetchImpl });
-    }
-    if (FLOW_RE.test(iframeUrl)) {
-      return resolveFlowPlayer(iframeUrl, tvarticlesUrl, { fetchImpl });
-    }
-    return null;
+    jobs.push(resolveViaDramavideo(fetchImpl, post, postUrl));
+    if (jobs.length === 0)
+      return [];
+    return Promise.all(jobs).then(function(resolved) {
+      var streams = [];
+      resolved.forEach(function(r) {
+        if (!r)
+          return;
+        if (Array.isArray(r)) {
+          r.forEach(function(s) {
+            if (s)
+              streams.push(s);
+          });
+        } else {
+          streams.push(r);
+        }
+      });
+      return streams;
+    });
   }).catch(function(e) {
-    console.log(
-      "[Desi-Serials.to] tvarticles resolution failed for " + tvarticlesUrl + ": " + (e && e.message)
-    );
-    return null;
+    console.log("[GoDesiTVSerials] resolve failed for " + postUrl + ": " + (e && e.message));
+    return [];
   });
 }
-function resolveFromEpisodeUrls(fetchImpl, episodeUrls, request) {
+function resolveFromEpisodeUrls(fetchImpl, episodeUrls) {
   if (episodeUrls.length === 0) {
     return Promise.resolve([]);
   }
   return Promise.all(
     episodeUrls.map(function(url) {
-      return fetchText(fetchImpl, url, { headers: BROWSER_HEADERS }).catch(function(e) {
-        console.log(
-          "[Desi-Serials.to] episode page fetch failed for " + url + ": " + (e && e.message)
-        );
-        return null;
-      });
+      return resolveEpisodeUrl(fetchImpl, url);
     })
-  ).then(function(episodePages) {
-    var allTvarticlesUrls = dedupe(
-      episodePages.flatMap(function(page) {
-        return page ? tvarticlesLinks(page) : [];
-      })
-    );
-    if (allTvarticlesUrls.length === 0) {
-      return [];
-    }
-    return Promise.all(
-      allTvarticlesUrls.map(function(url) {
-        return resolveTvarticlesPage(url, { fetchImpl });
-      })
-    ).then(function(resolved) {
-      return dedupeStreams(resolved);
+  ).then(function(resolved) {
+    var all = [];
+    resolved.forEach(function(set) {
+      if (Array.isArray(set)) {
+        set.forEach(function(s) {
+          if (s)
+            all.push(s);
+        });
+      } else if (set) {
+        all.push(set);
+      }
     });
+    return dedupeStreams(all);
   });
 }
-function resolveDesiSerials(request, options) {
+function resolveGoDesi(request, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  var archiveUrls = buildCandidateUrls(request).desiSerials;
   var searchUrls = buildSearchUrls(request);
-  if (searchUrls.length > 0) {
-    return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function(page) {
-      var episodeUrls = episodePageCandidates(page, request);
-      return episodeUrls.length > 0 ? episodeUrls : null;
-    }).then(function(episodeUrls) {
-      if (episodeUrls) {
-        return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request);
-      }
-      return processArchive(fetchImpl, archiveUrls, request, 0);
-    });
-  }
-  return processArchive(fetchImpl, archiveUrls, request, 0);
-}
-function processArchive(fetchImpl, archiveUrls, request, index) {
-  if (index >= archiveUrls.length) {
+  if (searchUrls.length === 0) {
     return Promise.resolve([]);
   }
-  return fetchText(fetchImpl, archiveUrls[index], { headers: BROWSER_HEADERS }).then(function(archive) {
-    if (!archive) {
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    }
-    var episodeUrls = episodePageCandidates(archive, request);
-    if (episodeUrls.length === 0) {
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    }
-    return resolveFromEpisodeUrls(fetchImpl, episodeUrls, request).then(function(streams) {
-      if (streams.length > 0) {
-        return streams;
-      }
-      return processArchive(fetchImpl, archiveUrls, request, index + 1);
-    });
+  return fetchFirstResult(fetchImpl, searchUrls, { headers: BROWSER_HEADERS }, function(page) {
+    var episodeUrls = episodePageCandidates(page, request);
+    return episodeUrls.length > 0 ? episodeUrls : null;
+  }).then(function(episodeUrls) {
+    if (!episodeUrls)
+      return [];
+    return resolveFromEpisodeUrls(fetchImpl, episodeUrls);
   });
 }
 function getStreamsForRequest(request, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  return resolveDesiSerials(request, { fetchImpl }).then(function(resolved) {
+  return resolveGoDesi(request, options).then(function(resolved) {
     return dedupeStreams(resolved).map(function(stream) {
-      stream.name = providerDisplayName(stream);
+      stream.name = "GoDesiTVSerials " + stream.backend;
       return toNuvioStream(request, stream);
     });
   }).catch(function(error) {
-    console.log("[Desi-Serials.to] resolver failed: " + error.message);
+    console.log("[GoDesiTVSerials] resolver failed: " + error.message);
     return [];
   });
 }
 function getStreams(tmdbId, mediaType, season, episode) {
-  if (mediaType !== "tv") {
+  if (mediaType !== "tv")
     return Promise.resolve([]);
-  }
   return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY }).then(function(request) {
-    return getStreamsForRequest(request, {
-      fetchImpl: typeof fetch !== "undefined" ? fetch : null
-    });
+    return getStreamsForRequest(request, { fetchImpl: typeof fetch !== "undefined" ? fetch : null });
   }).catch(function(error) {
-    console.log("[Desi-Serials.to] getStreams failed: " + error.message);
+    console.log("[GoDesiTVSerials] getStreams failed: " + error.message);
     return [];
   });
 }

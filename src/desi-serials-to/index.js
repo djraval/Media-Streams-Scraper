@@ -15,6 +15,7 @@ import {
   nextUriLine,
 } from "../lib/html.js";
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
+import { episodePostCandidates } from "../lib/episodes.js";
 import { decodeJuicyCodes } from "../lib/packer.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
 import { formatBytes, toNuvioStream } from "../lib/format.js";
@@ -61,10 +62,19 @@ function providerDisplayName(stream) {
 
 // --- Layer 2: Site search + episode page discovery ---
 
+// Archive crawl fan-out is capped: each URL is a serial fetch in-app, so an
+// unmapped network (non-Indian shows — never posted on this site) must not
+// walk all 14 channels × 3 pages (~60 fetches ≈ over the app's scraper
+// timeout). Real episodes are found by the site search anyway; archives only
+// cover shows whose posts are not search-indexed.
+var FALLBACK_ARCHIVE_CHANNELS = ["zee-tv", "sony-tv", "star-plus", "color-tv-hd", "sab-tv-hd"];
+var FALLBACK_ARCHIVE_PAGES = 1;
+var MAPPED_ARCHIVE_PAGES = 3;
+
 function buildCandidateUrls(request) {
-  var channels = (request.networkCandidates && request.networkCandidates.length > 0)
-    ? request.networkCandidates
-    : request.fallbackChannelSlugs;
+  var mapped = request.networkCandidates && request.networkCandidates.length > 0;
+  var channels = mapped ? request.networkCandidates : FALLBACK_ARCHIVE_CHANNELS;
+  var pages = mapped ? MAPPED_ARCHIVE_PAGES : FALLBACK_ARCHIVE_PAGES;
   var urls = [];
   for (var i = 0; i < channels.length; i++) {
     var channel = channels[i];
@@ -72,8 +82,9 @@ function buildCandidateUrls(request) {
     for (var j = 0; j < slugs.length; j++) {
       var slug = slugs[j];
       urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/");
-      urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/" + ARCHIVE_PAGE_PATH + "2/");
-      urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/" + ARCHIVE_PAGE_PATH + "3/");
+      for (var p = 2; p <= pages; p++) {
+        urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/" + ARCHIVE_PAGE_PATH + p + "/");
+      }
     }
   }
   return { desiSerials: dedupe(urls) };
@@ -81,41 +92,30 @@ function buildCandidateUrls(request) {
 
 function buildSearchUrls(request) {
   var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
   // WordPress search requires words separated by + (spaces), not hyphens.
   // The date slug is "10th-april-2026" but the search query needs "10th april 2026".
-  var dateQuery = dateSlug.replace(/-/g, " ");
   var slugs = (request.slugCandidates || []).slice(0, 2);
   var urls = [];
   for (var i = 0; i < slugs.length; i++) {
+    if (dateSlug) {
+      urls.push(
+        SITE_BASE + SEARCH_PATH +
+          encodeURIComponent(slugs[i] + " " + dateSlug.replace(/-/g, " ")).replace(/%20/g, "+"),
+      );
+    }
+    // Slug-only search keeps episode discovery working when TMDB has no
+    // air_date (new seasons, episode gaps) — post candidates then narrow by
+    // episode number or chronological position.
     urls.push(
-      SITE_BASE + SEARCH_PATH + encodeURIComponent(slugs[i] + " " + dateQuery).replace(/%20/g, "+"),
+      SITE_BASE + SEARCH_PATH +
+        encodeURIComponent(slugs[i].replace(/-/g, " ")).replace(/%20/g, "+"),
     );
   }
-  return urls;
+  return dedupe(urls);
 }
 
 function episodePageCandidates(markup, request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
-  var slugs = request.slugCandidates || [];
-  return dedupe(
-    links(markup).filter(function (href) {
-      if (!DESI_SERIALS_HOST_RE.test(href)) {
-        return false;
-      }
-      if (!href.toLowerCase().includes(dateSlug)) {
-        return false;
-      }
-      return slugs.some(function (slug) {
-        return href.toLowerCase().includes(slug);
-      });
-    }),
-  );
+  return episodePostCandidates(links(markup), request, DESI_SERIALS_HOST_RE);
 }
 
 function tvarticlesLinks(markup) {

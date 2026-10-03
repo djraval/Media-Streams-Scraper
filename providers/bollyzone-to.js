@@ -16,12 +16,12 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/yodesionline-net/index.js
-var yodesionline_net_exports = {};
-__export(yodesionline_net_exports, {
+// src/bollyzone-to/index.js
+var bollyzone_to_exports = {};
+__export(bollyzone_to_exports, {
   getStreams: () => getStreams
 });
-module.exports = __toCommonJS(yodesionline_net_exports);
+module.exports = __toCommonJS(bollyzone_to_exports);
 
 // src/lib/constants.js
 var TMDB_BASE = "https://api.themoviedb.org/3";
@@ -1345,20 +1345,39 @@ function chainProvider(cfg) {
   return { getStreams: getStreams2, getStreamsForRequest };
 }
 
-// src/yodesionline-net/index.js
+// src/bollyzone-to/index.js
+var SITE_HOST_RE = /^https:\/\/(?:www\.)?bollyzone\.to\//i;
+var NON_POST_RE = /\/(category|tag|author|page|wp-|feed|xmlrpc|comments|movie|episode)\b/i;
+var FSU_RE = /(?:route\.)?freeshorturls\.com\/g\/(player|plyr|nflix|embed)\/([A-Za-z0-9_-]+)/i;
 var provider = chainProvider({
-  name: "YoDesiOnline.net",
-  siteBase: "https://yodesionline.net",
+  name: "Bollyzone",
+  siteBase: "https://www.bollyzone.to",
   searchPath: "/?s=",
-  hostRe: /^https:\/\/(?:www\.)?yodesionline\.net\//i,
-  stripTrailingS: true,
+  hostRe: SITE_HOST_RE,
+  nonPostRe: NON_POST_RE,
   mediaTypes: ["tv"],
+  // freeshorturls redirect token -> real flow.tvlogy player URL. The variant
+  // path segment (player/plyr/nflix) is preserved and doubles as sourceTag.
+  transforms: [
+    {
+      match: FSU_RE,
+      expand: function(m) {
+        return [
+          {
+            url: "https://flow.tvlogy.to/" + m[1] + "/" + m[2],
+            label: m[1]
+          }
+        ];
+      }
+    }
+  ],
+  // Post URLs are predictable from slug + air date — try them before search.
   postUrls: function(request, slugs) {
     var dateSlug = episodeDateSlug(request.airDate);
     if (!dateSlug)
       return [];
     return slugs.map(function(slug) {
-      return "https://yodesionline.net/" + slug + "-" + dateSlug + "-full-episode/";
+      return "https://www.bollyzone.to/series/" + slug + "-" + dateSlug + "-watch-online-episode/";
     });
   }
 });
