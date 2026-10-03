@@ -361,6 +361,44 @@ ffmpeg -user_agent "Mozilla/5.0 ..." -headers "Referer: https://embed-url\r\n" -
 ffprobe -user_agent "Mozilla/5.0 ..." -headers "Referer: ...\r\n" -v error -show_entries stream=codec_name,width,height,duration -of json "URL" 2>&1
 ```
 
+## Recon & Cracking Methodology
+
+Lessons from cracking the gated sites (Oct 2026) — read before assuming a site
+is unscrapable.
+
+- **"JS-gated" usually means ad dressing, not a real gate.** The obfuscated JS
+  on these sites is almost always BlockAdBlock detectors, RC4 string arrays,
+  or anti-bot noise — never the player. desitellybox's "JS players" were
+  static `SRC=` iframes; tellynagari's gate was a pure URL rewrite; bollyzone's
+  ToroFlix ajax endpoint wasn't even used on the target posts. **Hunt the
+  simplest path first**: harvest static HTML, look for URL-shape rewrites.
+  Only unpack obfuscation after proving it carries the player.
+- **Read URL path segments for semantics before following redirects.**
+  `route.freeshorturls.com/g/player/{id}` — `player` is literally a
+  flow.tvlogy variant name and `{id}` the flowId. The whole maskr →
+  google.com/url → `/redirect/{token}` chain is referer laundering that can
+  be skipped entirely: rewrite to the obvious backend URL and send the
+  hop page as `Referer`. Laravel shorteners (XSRF-TOKEN + laravel_session
+  cookies) are referer launders, not gates.
+- **On a 403, vary one header at a time** — `Referer` first (flow.tvlogy 403s
+  on any referer except the embedding page), then `User-Agent` (upbolt
+  whitelists social-crawler UAs; its tokens are bound to the exact UA string
+  used at fetch). Don't conclude a host is dead after one naked fetch.
+- **Browser = ground truth for "is it alive / what does a user see";
+  node fetch = ground truth for what a provider can use.** The QuickJS
+  sandbox is a text fetcher — a flow that needs real DOM/JS/clicks can't be
+  ported. Recon in Chrome (CDP at `localhost:29229`), implement with fetch.
+  Watch for cloaking: groundbanks shows browsers a fake blog post while
+  serving the player link page to plain fetchers.
+- **Verify test inputs before assuming regression.** Recurring false alarms:
+  wrong TMDB id (KBC is 911, not 122154 — a Japanese show), missing year in
+  a slug's date portion (`sa-re-ga-ma-pa-…-september-2026-`), and site-side
+  embed rotation changing stream counts between runs. Check the live page
+  and the TMDB record before touching code.
+- **Sites cloak, rotate, and churn — backends don't.** Frontend domains die
+  every few months; vkspeed.com has run since 2018 and dramavideo.se is paid
+  through 2027. Judge provider health by backend liveness, not frontend age.
+
 ## Key Findings & Gotchas
 
 1. **VkSpeed/VkPrime quality labels are wrong** — JW may say "360p" for real 720p **or** real 360p. Never trust JW. Show resolution guess + actual bitrate + size via `toNuvioStream` (Content-Length + TMDB runtime). Binary MP4 probing is impossible in Nuvio (no axios, no arrayBuffer).
