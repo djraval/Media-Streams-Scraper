@@ -1,6 +1,6 @@
 {
   "name": "Desi-Serials Repo",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "scrapers": [
     {
       "id": "desi-serials-to",
@@ -11,7 +11,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/desi-serials-to.js?v=3.2.0",
+      "filename": "providers/desi-serials-to.js?v=3.3.0",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -35,7 +35,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/desiruleztv-net.js?v=3.2.0",
+      "filename": "providers/desiruleztv-net.js?v=3.3.0",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -58,7 +58,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/yodesionline-net.js?v=3.2.0",
+      "filename": "providers/yodesionline-net.js?v=3.3.0",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -81,7 +81,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/godesitvserials-com.js?v=3.2.0",
+      "filename": "providers/godesitvserials-com.js?v=3.3.0",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -105,7 +105,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/apnetv-pro.js?v=3.2.0",
+      "filename": "providers/apnetv-pro.js?v=3.3.0",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -122,7 +122,20 @@
     {
       "id": "desitvbox-sbs",
       "name": "DesiTvBox.sbs",
-      "filename": "desitvbox-sbs.js?v=3.2.0",
+      "filename": "desitvbox-sbs.js?v=3.3.0",
+      "mediaTypes": [
+        "tv"
+      ],
+      "formats": [
+        "mp4",
+        "hls"
+      ],
+      "enabled": true
+    },
+    {
+      "id": "desitellybox-to",
+      "name": "DesiTellyBox.to",
+      "filename": "desitellybox-to.js?v=3.3.0",
       "mediaTypes": [
         "tv"
       ],

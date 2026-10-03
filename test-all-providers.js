@@ -8,6 +8,7 @@ var providers = {
   'godesitvserials-com': require('./providers/godesitvserials-com.js'),
   'apnetv-pro': require('./providers/apnetv-pro.js'),
   'desitvbox-sbs': require('./providers/desitvbox-sbs.js'),
+  'desitellybox-to': require('./providers/desitellybox-to.js'),
 };
 
 // TV content — daily soaps + trending shows
@@ -44,7 +45,7 @@ var movieContent = [
   { id: '872906', name: 'Jawan' },
 ];
 
-var tvProviders = ['desi-serials-to', 'desiruleztv-net', 'yodesionline-net', 'godesitvserials-com', 'apnetv-pro', 'desitvbox-sbs'];
+var tvProviders = ['desi-serials-to', 'desiruleztv-net', 'yodesionline-net', 'godesitvserials-com', 'apnetv-pro', 'desitvbox-sbs', 'desitellybox-to'];
 var movieProviders = [];
 
 var TIMEOUT = 45000;
