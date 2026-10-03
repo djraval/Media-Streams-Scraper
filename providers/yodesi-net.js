@@ -1,3 +1,28 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+// src/yodesi-net/index.js
+var yodesi_net_exports = {};
+__export(yodesi_net_exports, {
+  getStreams: () => getStreams
+});
+module.exports = __toCommonJS(yodesi_net_exports);
+
 // src/lib/constants.js
 var TMDB_BASE = "https://api.themoviedb.org/3";
 var TMDB_API_KEY = "4e1899804b6db6d01db1e59391e8a5fe";
@@ -72,6 +97,24 @@ function fetchJson(fetchImpl, url) {
     return response.json();
   });
 }
+function fetchContentLength(fetchImpl, url, headers) {
+  return fetchImpl(url, { method: "GET", headers: Object.assign({}, headers || {}, { Range: "bytes=0-0" }) }).then(function(response) {
+    if (!response || response.ok === false)
+      return 0;
+    var cr = response.headers && response.headers.get("content-range") || "";
+    var match = cr.match(/\/(\d+)$/);
+    if (match) {
+      if (typeof response.arrayBuffer === "function") {
+        response.arrayBuffer().catch(function() {
+        });
+      }
+      return Number(match[1]);
+    }
+    return Number(response.headers && response.headers.get("content-length") || 0) || 0;
+  }).catch(function() {
+    return 0;
+  });
+}
 
 // src/lib/html.js
 function dedupe(values) {
@@ -100,6 +143,10 @@ function dedupeStreams(streams) {
     }
   }
   return out;
+}
+function isPlaceholderUrl(url) {
+  var lower = String(url || "").toLowerCase();
+  return lower.indexOf("/ads/") !== -1 || lower.indexOf("127.0.0.1") !== -1;
 }
 function nextUriLine(lines, from) {
   for (var j = from; j < lines.length; j += 1) {
@@ -140,6 +187,9 @@ function mediaCandidates(raw, extension) {
     matches.push(m[0].replace(/[.;)]+$/g, ""));
   }
   return dedupe(matches);
+}
+function mp4Candidates(raw) {
+  return mediaCandidates(raw, "mp4");
 }
 function m3u8Candidates(raw) {
   return mediaCandidates(raw, "m3u8");
@@ -520,6 +570,65 @@ function decodeJuicyCodes(html) {
   return unpack(decodeBase64(payload));
 }
 
+// src/lib/vkplayer.js
+function qualityNearUrl(text, url) {
+  var index = text.indexOf(url);
+  if (index === -1)
+    return 0;
+  var before = text.substring(Math.max(0, index - 80), index);
+  var after = text.substring(index, index + 120);
+  var matches = (before + after).match(/(\d{3,4})p?/gi) || [];
+  if (matches.length === 0)
+    return 0;
+  return Number(matches[matches.length - 1]);
+}
+function jwPlayerSourceQualities(raw) {
+  var text = decodeText(raw);
+  var map = /* @__PURE__ */ new Map();
+  var re = /\{\s*(?:file|src)\s*:\s*["']([^"']+)["']\s*,\s*(?:label|quality|res)\s*:\s*["']?(\d{3,4})p?["']?\s*[^}]*\}/gi;
+  var m;
+  while ((m = re.exec(text)) !== null) {
+    map.set(m[1], Number(m[2]));
+  }
+  var re2 = /\{\s*(?:label|quality|res)\s*:\s*["']?(\d{3,4})p?["']?\s*,\s*(?:file|src)\s*:\s*["']([^"']+)["']\s*[^}]*\}/gi;
+  while ((m = re2.exec(text)) !== null) {
+    if (!map.has(m[2])) {
+      map.set(m[2], Number(m[1]));
+    }
+  }
+  return map;
+}
+function rankedMp4Candidates(raw) {
+  var text = decodeText(raw);
+  var jwMap = jwPlayerSourceQualities(raw);
+  return mp4Candidates(text).map(function(url) {
+    return { url, quality: jwMap.get(url) || qualityNearUrl(text, url) || 0 };
+  }).sort(function(a, b) {
+    return b.quality - a.quality;
+  });
+}
+function resolveVkPlayer(embedUrl, refererUrl, options) {
+  options = options || {};
+  var fetchImpl = resolveFetch(options);
+  return fetchText(fetchImpl, embedUrl, browserHeaders(refererUrl)).then(function(playerHtml) {
+    if (!playerHtml)
+      return [];
+    var decoded = unpack(playerHtml);
+    var payload = [playerHtml, decoded].filter(Boolean).join("\n");
+    var sources = rankedMp4Candidates(payload);
+    return sources.map(function(src) {
+      return {
+        url: src.url,
+        quality: "unknown",
+        kind: "mp4",
+        headers: { Referer: embedUrl, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+      };
+    });
+  }).catch(function() {
+    return [];
+  });
+}
+
 // src/lib/flow.js
 function hlsQualityFromManifest(raw) {
   var matches = String(raw || "").matchAll(/RESOLUTION=\d+x(\d{3,4})/gi);
@@ -709,108 +818,402 @@ function toNuvioStream(request, stream) {
   };
 }
 
-// src/yodesi-net/index.js
-var SITE_BASE = "https://www.yodesi.net";
-var SEARCH_PATH = "/?s=";
-var SITE_HOST_RE = /^https:\/\/(?:www\.)?yodesi\.net\//i;
-var NON_POST_RE = /\/(category|tag|author|page|wp-|feed|xmlrpc|comments)\b|\/20\d{2}(?:\/\d{2})?\/?$|\/(about|contact|dmca|privacy|terms|alt-balaji|amazon)\/?$/i;
-var PLAYER_LINK_RE = /(?:href=["'])?(https?:\/\/(?:www\.)?tvcine\.me\/player\.php\?id=\d+)/gi;
-var FLOW_IFRAME_RE = /src=['"](https?:\/\/flow\.tvlogy\.to\/[A-Za-z0-9/_-]+\/?)['"]/i;
-function buildSearchUrls(request) {
-  return (request.slugCandidates || []).slice(0, 3).map(function(slug) {
-    return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug.replace(/-/g, " ")).replace(/%20/g, "+");
-  });
+// src/lib/chain.js
+var VK_EMBED_RE = /(vkspeed|vkprime)\.com\/embed-[A-Za-z0-9_-]+(?:-\d+x\d+)?\.html/i;
+var FLOW_RE = /flow\.tvlogy\.to\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/?/i;
+var MEDIA_META_RE = /\/media_meta\.php\?v=/i;
+var M3U8_RE = /\.m3u8(?:\?|$)/i;
+var MP4_RE = /\.mp4(?:\?|$)/i;
+var HOP_PATH_RE = /\.php\?[^"'\s]*(?:id|v|url|docid|slug|source|src|file|embed|video|watch|play|go)=/i;
+var JUNK_RE = /(?:facebook|twitter|instagram|t\.me|telegram|whatsapp|pinterest|youtube|google|gstatic|doubleclick|googlesyndication|popads|histats|feedburner|gravatar|disqus|w3\.org|schema\.org|gmpg\.org|creativecommons)\.|wp-(?:content|includes|json)|xmlrpc|\/feed\/|sitemap|\.css|\.js(?:on)?(?:\?|$)|\.(?:png|jpe?g|gif|svg|ico|woff2?|webp)(?:\?|$)|wp-login|#respond|\/comments?\//i;
+function stripTags(raw) {
+  return String(raw || "").replace(/<[^>]*>/g, "").trim();
 }
-function episodePageCandidates(markup, request) {
-  return episodePostCandidates(links(markup), request, SITE_HOST_RE, NON_POST_RE);
-}
-function findPlayerLinks(markup) {
-  var urls = [];
-  var re = new RegExp(PLAYER_LINK_RE.source, "gi");
+function harvestPage(markup, pageUrl) {
+  var found = [];
+  var push = function(url, label2) {
+    if (!url)
+      return;
+    url = decodeText(String(url).trim());
+    if (url.indexOf("//") === 0)
+      url = "https:" + url;
+    if (url.charAt(0) === "/" || url.indexOf("http") !== 0) {
+      url = resolveRelativeUrl(pageUrl, url);
+    }
+    if (url.indexOf("http") === 0)
+      found.push({ url, label: label2 || "" });
+  };
+  var aRe = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   var m;
-  while ((m = re.exec(markup)) !== null) {
-    urls.push(m[1]);
+  while ((m = aRe.exec(markup)) !== null) {
+    var inner = stripTags(m[2]);
+    var pm = inner.match(/\(([^()]{1,40})\)/);
+    var label = pm ? pm[1] : inner.slice(0, 60);
+    var urls = m[1].match(/https?:\/\/[^"'\s)]+|\/\/[^"'\s)]+/g) || [];
+    urls.forEach(function(u) {
+      push(u.replace(/[,;]+$/, ""), label);
+    });
   }
-  return dedupe(urls).slice(0, 4);
-}
-function findPlayersFromPages(fetchImpl, urls) {
-  return fetchFirstResult(fetchImpl, urls, { headers: BROWSER_HEADERS }, function(page) {
-    var players = findPlayerLinks(page);
-    return players.length > 0 ? players : null;
-  }).then(function(players) {
-    return players || [];
+  var attrRe = /(?:src|href|file|source|data-[A-Za-z_-]+|streamUrl)\s*=\s*["']([^"'<>\s]+)["']/gi;
+  while ((m = attrRe.exec(markup)) !== null) {
+    push(m[1], "");
+  }
+  var bareRe = /(https?:\/\/[^"'\s<>)\]]+(?:vkspeed\.com|vkprime\.com|flow\.tvlogy\.to|streaming\.disk\.yandex\.net|media_meta\.php|\.m3u8|\.mp4)[^"'\s<>)\]]*)/gi;
+  while ((m = bareRe.exec(markup)) !== null) {
+    push(m[1], "");
+  }
+  var seen = {};
+  return found.filter(function(e) {
+    if (seen[e.url])
+      return false;
+    seen[e.url] = true;
+    return true;
   });
 }
-function extractFlowUrls(fetchImpl, playerUrls) {
-  return Promise.all(playerUrls.map(function(playerUrl) {
-    return fetchImpl(playerUrl, { headers: { Referer: SITE_BASE + "/", "User-Agent": BROWSER_HEADERS["User-Agent"] } }).then(function(res) {
-      return res ? res.text() : null;
-    }).then(function(page) {
-      if (!page)
+function cleanPartTitle(title) {
+  return String(title || "").replace(/\s*\d{1,2}(?:st|nd|rd|th)\s+\w+\s+\d{4}\s*$/i, "").trim();
+}
+function resolveBackend(url, referer, fetchImpl, ctx) {
+  if (MEDIA_META_RE.test(url)) {
+    var metaBase = url.slice(0, url.lastIndexOf("/") + 1);
+    return fetchJson(fetchImpl, url).then(function(meta) {
+      if (!meta || !meta.source || !meta.source.file)
         return null;
-      var m = page.match(FLOW_IFRAME_RE);
-      return m ? { url: m[1], referer: playerUrl } : null;
-    }).catch(function() {
-      return null;
+      var abs = function(u) {
+        return u && u.indexOf("http") !== 0 ? metaBase + u : u;
+      };
+      return {
+        backend: "dstshndisk",
+        kind: "mp4",
+        quality: "480p",
+        url: abs(meta.source.file),
+        fallbackUrl: abs(meta.source.fallbackFile),
+        size: "",
+        sizeBytes: 0,
+        sourceTag: cleanPartTitle(meta.source.title),
+        headers: null
+      };
     });
-  })).then(function(entries) {
-    var seen = {};
-    return entries.filter(function(e) {
-      if (!e)
-        return false;
-      var id = e.url.replace(/\/+$/, "").split("/").pop();
-      if (seen[id])
-        return false;
-      seen[id] = true;
-      return true;
-    });
-  });
-}
-function resolveYoDesi(request, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  return fetchFirstResult(fetchImpl, buildSearchUrls(request), { headers: BROWSER_HEADERS }, function(page) {
-    var episodeUrls = episodePageCandidates(page, request);
-    return episodeUrls.length > 0 ? episodeUrls : null;
-  }).then(function(episodeUrls) {
-    if (!episodeUrls)
-      return [];
-    return findPlayersFromPages(fetchImpl, episodeUrls).then(function(playerUrls) {
-      return extractFlowUrls(fetchImpl, playerUrls).then(function(flows) {
-        return Promise.all(flows.map(function(entry) {
-          return resolveFlowPlayer(entry.url, entry.referer, { fetchImpl }).catch(function(error) {
-            console.log("[YoDesi] flow failed for " + entry.url + ": " + (error && error.message));
-            return null;
-          });
-        })).then(function(streams) {
-          return streams.filter(function(s) {
-            return s !== null;
-          });
-        });
+  }
+  var vkM = url.match(VK_EMBED_RE);
+  if (vkM) {
+    var embedUrl = "https://" + vkM[0].replace(/^https?:\/\//i, "");
+    return resolveVkPlayer(embedUrl, referer, { fetchImpl }).then(function(sources) {
+      var real = (sources || []).filter(function(s) {
+        return !isPlaceholderUrl(s.url);
+      });
+      if (real.length === 0)
+        return null;
+      var best = real[0];
+      var stream = {
+        backend: embedUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime",
+        kind: "mp4",
+        quality: best.quality || "unknown",
+        url: best.url,
+        size: "",
+        sizeBytes: 0,
+        sourceTag: ctx.label || "",
+        headers: best.headers
+      };
+      return fetchContentLength(fetchImpl, best.url, best.headers).then(function(sizeBytes) {
+        stream.size = formatBytes(sizeBytes);
+        stream.sizeBytes = sizeBytes;
+        return stream;
       });
     });
-  });
-}
-function getStreamsForRequest(request, options) {
-  return resolveYoDesi(request, options).then(function(resolved) {
-    return dedupeStreams(resolved).map(function(stream) {
-      stream.name = "YoDesi Flow" + (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
-      return toNuvioStream(request, stream);
+  }
+  var fM = url.match(FLOW_RE);
+  if (fM) {
+    var flowUrl = fM[0].indexOf("http") === 0 ? fM[0] : "https://" + fM[0];
+    return resolveFlowPlayer(flowUrl, referer, { fetchImpl }).then(function(stream) {
+      if (stream && ctx.label && !stream.sourceTag)
+        stream.sourceTag = ctx.label;
+      return stream;
     });
-  }).catch(function(error) {
-    console.log("[YoDesi] resolver failed: " + error.message);
+  }
+  if (M3U8_RE.test(url)) {
+    return Promise.resolve({
+      backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
+      kind: "hls",
+      quality: "",
+      url,
+      size: "",
+      sizeBytes: 0,
+      sourceTag: ctx.label || "",
+      headers: null
+    });
+  }
+  if (MP4_RE.test(url)) {
+    return Promise.resolve({
+      backend: "mp4",
+      kind: "mp4",
+      quality: "",
+      url,
+      size: "",
+      sizeBytes: 0,
+      sourceTag: ctx.label || "",
+      headers: null
+    });
+  }
+  return Promise.resolve(null);
+}
+function candidateKey(url) {
+  var m;
+  if (m = url.match(/flow\.tvlogy\.to\/[A-Za-z0-9_-]+\/([A-Za-z0-9_-]+)/i)) {
+    return "flow:" + m[1];
+  }
+  if (m = url.match(/(vkspeed|vkprime)\.com\/embed-([A-Za-z0-9_-]+)/i)) {
+    return m[1].toLowerCase() + ":" + m[2];
+  }
+  if (m = url.match(/media_meta\.php\?v=([^&]+)/i)) {
+    return "meta:" + m[1];
+  }
+  return url;
+}
+function partitionUrls(markup, pageUrl, cfg) {
+  var harvested = harvestPage(markup, pageUrl);
+  var backends = [];
+  var hops = [];
+  var hopSeen = {};
+  var backendSeen = {};
+  harvested.forEach(function(entry) {
+    var urls = [entry];
+    (cfg.transforms || []).forEach(function(t) {
+      var next = [];
+      urls.forEach(function(u) {
+        var mm = u.url.match(t.match);
+        if (mm) {
+          var out = t.expand(mm, u.url) || [];
+          out.forEach(function(nu) {
+            next.push({ url: nu, label: u.label });
+          });
+        } else {
+          next.push(u);
+        }
+      });
+      urls = next;
+    });
+    urls.forEach(function(u) {
+      var url = u.url;
+      var key = candidateKey(url);
+      if (MEDIA_META_RE.test(url) || VK_EMBED_RE.test(url) || FLOW_RE.test(url) || M3U8_RE.test(url) || MP4_RE.test(url)) {
+        if (!backendSeen[key]) {
+          backendSeen[key] = true;
+          backends.push({ url, label: u.label });
+        }
+        return;
+      }
+      var isHop = (HOP_PATH_RE.test(url) || (cfg.extraHopRe || []).some(function(re) {
+        return re.test(url);
+      })) && !JUNK_RE.test(url) && !(cfg.skipHopRe && cfg.skipHopRe.test(url));
+      if (isHop && !hopSeen[url]) {
+        hopSeen[url] = true;
+        hops.push({ url, label: u.label });
+      }
+    });
+  });
+  return { backends, hops };
+}
+function resolvePost(fetchImpl, postUrl, cfg) {
+  var maxHops = cfg.maxHops || 8;
+  return fetchImpl(postUrl, { headers: BROWSER_HEADERS }).then(function(res) {
+    return res ? res.text() : null;
+  }).then(function(post) {
+    if (!post)
+      return [];
+    var found = partitionUrls(post, postUrl, cfg);
+    var backendJobs = found.backends.map(function(b) {
+      return resolveBackend(b.url, postUrl, fetchImpl, { label: b.label }).catch(function() {
+        return null;
+      });
+    });
+    var hopJobs = found.hops.slice(0, maxHops).map(function(hop) {
+      return fetchImpl(hop.url, {
+        headers: { Referer: postUrl, "User-Agent": BROWSER_HEADERS["User-Agent"] }
+      }).then(function(res) {
+        return res ? res.text() : null;
+      }).then(function(hopPage) {
+        if (!hopPage)
+          return [];
+        var inner = partitionUrls(hopPage, hop.url, cfg);
+        var hopTag = cfg.hopTag ? cfg.hopTag(hop.url) : hop.label || "";
+        return Promise.all(
+          inner.backends.map(function(b) {
+            return resolveBackend(b.url, hop.url, fetchImpl, {
+              label: b.label || hopTag
+            }).catch(function() {
+              return null;
+            });
+          })
+        );
+      }).catch(function() {
+        return [];
+      });
+    });
+    return Promise.all([Promise.all(backendJobs), Promise.all(hopJobs)]).then(function(groups) {
+      var streams = [];
+      groups[0].forEach(function(s) {
+        if (s)
+          streams.push(s);
+      });
+      groups[1].forEach(function(set) {
+        (set || []).forEach(function(s) {
+          if (s)
+            streams.push(s);
+        });
+      });
+      return dedupeStreams(streams);
+    });
+  }).catch(function() {
     return [];
   });
 }
-function getStreams(tmdbId, mediaType, season, episode) {
-  if (mediaType !== "tv")
-    return Promise.resolve([]);
-  return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY }).then(function(request) {
-    return getStreamsForRequest(request, { fetchImpl: typeof fetch !== "undefined" ? fetch : null });
-  }).catch(function(error) {
-    console.log("[YoDesi] getStreams failed: " + error.message);
-    return [];
+function displayBackend2(backend) {
+  return String(backend || "source").replace(/(^|[-_\s]+)([a-z])/g, function(_m, prefix, ch) {
+    return prefix + ch.toUpperCase();
+  }).replace(/[-_]+/g, "");
+}
+function wpSearchUrls(request, siteBase, searchPath, slugCandidates2, datedFirst) {
+  var dateSlug = episodeDateSlug(request.airDate);
+  var terms = function(s) {
+    return encodeURIComponent(s.replace(/-/g, " ")).replace(/%20/g, "+");
+  };
+  var urls = [];
+  var slugs = slugCandidates2.slice(0, 3);
+  if (dateSlug) {
+    var dq = dateSlug.replace(/-/g, " ");
+    slugs.forEach(function(s) {
+      urls.push(siteBase + searchPath + encodeURIComponent(s.replace(/-/g, " ") + " " + dq).replace(/%20/g, "+"));
+    });
+  }
+  slugs.forEach(function(s) {
+    urls.push(siteBase + searchPath + terms(s));
   });
+  return dedupe(urls);
+}
+function chainProvider(cfg) {
+  var logTag = "[" + cfg.name + "]";
+  function slugVariants(request) {
+    var candidates = request.slugCandidates || [];
+    if (!cfg.stripTrailingS)
+      return candidates;
+    return dedupe(
+      candidates.map(function(slug) {
+        return slug.replace(/-s(?=-|$)/g, "s");
+      }).concat(candidates)
+    );
+  }
+  function searchUrls(request) {
+    if (cfg.searchUrls)
+      return cfg.searchUrls(request, slugVariants(request));
+    return wpSearchUrls(request, cfg.siteBase, cfg.searchPath || "/?s=", slugVariants(request));
+  }
+  function postCandidates(markup, request) {
+    if (cfg.postCandidates)
+      return cfg.postCandidates(markup, request);
+    return episodePostCandidates(links(markup), request, cfg.hostRe, cfg.nonPostRe);
+  }
+  function directUrls(request) {
+    return cfg.postUrls ? cfg.postUrls(request, slugVariants(request)) : [];
+  }
+  function listingUrls(request) {
+    return cfg.listingUrls ? cfg.listingUrls(request, slugVariants(request)) : [];
+  }
+  function postsFromPages(fetchImpl, urls, request) {
+    if (urls.length === 0)
+      return Promise.resolve(null);
+    return fetchFirstResult(fetchImpl, urls, { headers: BROWSER_HEADERS }, function(page) {
+      var cands = postCandidates(page, request);
+      return cands.length > 0 ? cands : null;
+    });
+  }
+  function resolveRequest(request, options) {
+    options = options || {};
+    var fetchImpl = resolveFetch(options);
+    var maxPosts = cfg.maxPosts || 2;
+    function resolvePosts(urls) {
+      if (!urls || urls.length === 0)
+        return Promise.resolve([]);
+      return Promise.all(
+        urls.slice(0, maxPosts).map(function(url) {
+          return resolvePost(fetchImpl, url, cfg);
+        })
+      ).then(function(sets) {
+        var all = [];
+        sets.forEach(function(set) {
+          (set || []).forEach(function(s) {
+            if (s)
+              all.push(s);
+          });
+        });
+        return dedupeStreams(all);
+      });
+    }
+    function fromDiscovery() {
+      return postsFromPages(fetchImpl, searchUrls(request), request).then(function(posts) {
+        if (posts && posts.length > 0)
+          return resolvePosts(posts);
+        return postsFromPages(fetchImpl, listingUrls(request), request).then(resolvePosts);
+      });
+    }
+    var direct = directUrls(request);
+    if (direct.length > 0) {
+      var idx = 0;
+      var tryDirect = function() {
+        if (idx >= direct.length)
+          return Promise.resolve([]);
+        var url = direct[idx];
+        idx += 1;
+        return resolvePost(fetchImpl, url, cfg).then(function(streams) {
+          return streams.length > 0 ? streams : tryDirect();
+        });
+      };
+      return tryDirect().then(function(streams) {
+        return streams.length > 0 ? streams : fromDiscovery();
+      });
+    }
+    return fromDiscovery();
+  }
+  function getStreamsForRequest(request, options) {
+    return resolveRequest(request, options).then(function(resolved) {
+      return dedupeStreams(resolved).map(function(stream) {
+        if (cfg.streamName) {
+          stream.name = cfg.streamName(stream);
+        } else {
+          stream.name = cfg.name + " " + displayBackend2(stream.backend) + (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
+        }
+        return toNuvioStream(request, stream);
+      });
+    }).catch(function(error) {
+      console.log(logTag + " resolver failed: " + error.message);
+      return [];
+    });
+  }
+  function getStreams2(tmdbId, mediaType, season, episode) {
+    if (cfg.mediaTypes && cfg.mediaTypes.indexOf(mediaType) === -1) {
+      return Promise.resolve([]);
+    }
+    return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY }).then(function(request) {
+      return getStreamsForRequest(request, { fetchImpl: typeof fetch !== "undefined" ? fetch : null });
+    }).catch(function(error) {
+      console.log(logTag + " getStreams failed: " + error.message);
+      return [];
+    });
+  }
+  return { getStreams: getStreams2, getStreamsForRequest };
+}
+
+// src/yodesi-net/index.js
+var provider = chainProvider({
+  name: "YoDesi",
+  siteBase: "https://www.yodesi.net",
+  searchPath: "/?s=",
+  hostRe: /^https:\/\/(?:www\.)?yodesi\.net\//i,
+  nonPostRe: /\/(category|tag|author|page|wp-|feed|xmlrpc|comments)\b|\/20\d{2}(?:\/\d{2})?\/?$|\/(about|contact|dmca|privacy|terms|alt-balaji|amazon)\/?$/i,
+  mediaTypes: ["tv"]
+});
+function getStreams(tmdbId, mediaType, season, episode) {
+  return provider.getStreams(tmdbId, mediaType, season, episode);
 }
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { getStreams };

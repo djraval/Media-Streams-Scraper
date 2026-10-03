@@ -12,6 +12,7 @@ package.json           # esbuild dev dependency + build scripts
 build.js               # esbuild bundler — bundles src/<name>/ → providers/<name>.js
 src/
   lib/
+    chain.js             # Generic post→links→hop→backend engine + provider factory
     constants.js         # Shared constants (TMDB, UA, headers, channel slugs, host arrays)
     http.js              # fetchText, fetchFirstResult, fetchJson, fetchContentLength
     html.js              # dedupe, decodeText, attrValues, links, iframes, embedHostRegex
@@ -211,6 +212,40 @@ Bitrate and size are shown separately so users can judge actual visual quality.
 |--------|----------------|-------|
 | **VkSpeed/VkPrime MP4** | bitrate only; separate exact size | JW labels ignored — resolution unknown without binary probe |
 | **Flow HLS** | master `RESOLUTION` + `BANDWIDTH`; separate estimated size | No segment sampling |
+
+## The Chain Engine (src/lib/chain.js) — used by 7 of 10 providers
+
+All serial sites share one shape: **post → outbound URLs → hop page(s) →
+known backends**. `chainProvider(cfg)` implements the whole flow; providers
+are ~40-120 lines of pure config:
+
+- **Harvest** — every absolute URL on a page, in document order: anchor-tag
+  URLs (href AND onclick-arg like `itm('url')`, with inner-text/paren label),
+  every attribute value (`src`/`SRC`/`href`/`data-*`/`streamUrl`), plus bare
+  backend-host URLs quoted in page text or player JS. Relative + protocol-
+  relative URLs are normalized.
+- **Classify by URL shape** — backend regexes (vkspeed/vkprime `embed-*.html`,
+  `flow.tvlogy.to/{variant}/{id}`, `*/media_meta.php?v=`, `*.m3u8`, `*.mp4`)
+  resolve immediately; a generic "`.php?`+player-ish param" rule (`id=`,`v=`,
+  `docid=`,…) marks hops; a junk-host filter drops nav/social/asset links.
+- **Hop follow (depth 1)** — hop pages are fetched and re-harvested; their
+  backends resolve with **the hop page as Referer** (the flow.tvlogy 403 rule
+  is baked in: a backend is always resolved with the page it was found on).
+- **Dedupe by canonical id** — flow by flowId (4 player.php ids → 1 stream),
+  vk by embed id, meta by token.
+- **transforms[]** — per-site URL rewrites that consume ad-gate URLs and emit
+  the real destination(s): tellynagari `tellyduniya/usn/{gate}.php?docid` →
+  `articleweb.xyz/vid/{gdrive,vkspeed}.php?id=`; desiserials `getlink.php?v&
+  part2&part3` → `dstshndisk media_meta.php?v=` per token.
+- **Discovery config** — `postUrls` (predictable slug+date post URLs tried
+  first), `searchUrls`/`searchPath` (default WordPress `?s=` builder),
+  `listingUrls` (category/archive fallback), `postCandidates` override
+  (tellynagari latest-only fallback, desiserials hash-id post shape).
+- Providers on it: desiruleztv-net, yodesionline-net, desitvbox-sbs,
+  desitellybox-to, tellynagari-com, yodesi-net, desiserials-su.
+- **Not on it** (different discovery class): desi-serials-to (tvarticles
+  interstitial + own flow impl), godesitvserials-com (token API), apnetv-pro
+  (data-attr embed pairs).
 
 ## Scraping Robustness Patterns
 
