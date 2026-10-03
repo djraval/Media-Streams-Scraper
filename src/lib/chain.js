@@ -479,14 +479,20 @@ export function chainProvider(cfg) {
   function getStreamsForRequest(request, options) {
     return resolveRequest(request, options)
       .then(function (resolved) {
-        return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream) {
+        // The app sorts each group's streams alphabetically by name
+        // (StreamFetchSupportKt.sortedForGroupedDisplay) — array order is
+        // ignored. Rank-prefix the name so that alphabetical order reproduces
+        // our quality ranking: "01 …" is each provider's best stream.
+        return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream, idx) {
+          var base;
           if (cfg.streamName) {
-            stream.name = cfg.streamName(stream);
+            base = cfg.streamName(stream);
           } else {
-            stream.name =
+            base =
               cfg.name + " " + displayBackend(stream.backend) +
               (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
           }
+          stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " " + base;
           return toNuvioStream(request, stream);
         });
       })

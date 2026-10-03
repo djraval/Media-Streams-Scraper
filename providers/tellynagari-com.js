@@ -1345,12 +1345,14 @@ function chainProvider(cfg) {
   }
   function getStreamsForRequest(request, options) {
     return resolveRequest(request, options).then(function(resolved) {
-      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream) {
+      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream, idx) {
+        var base;
         if (cfg.streamName) {
-          stream.name = cfg.streamName(stream);
+          base = cfg.streamName(stream);
         } else {
-          stream.name = cfg.name + " " + displayBackend2(stream.backend) + (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
+          base = cfg.name + " " + displayBackend2(stream.backend) + (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
         }
+        stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " " + base;
         return toNuvioStream(request, stream);
       });
     }).catch(function(error) {

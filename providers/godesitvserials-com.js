@@ -920,8 +920,8 @@ function resolveGoDesi(request, options) {
 }
 function getStreamsForRequest(request, options) {
   return resolveGoDesi(request, options).then(function(resolved) {
-    return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream) {
-      stream.name = "GoDesiTVSerials " + stream.backend;
+    return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream, idx) {
+      stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " GoDesiTVSerials " + stream.backend;
       return toNuvioStream(request, stream);
     });
   }).catch(function(error) {

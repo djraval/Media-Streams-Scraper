@@ -415,8 +415,10 @@ function getStreamsForRequest(request, options) {
   var fetchImpl = resolveFetch(options);
   return resolveDesiSerials(request, { fetchImpl: fetchImpl })
     .then(function (resolved) {
-      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream) {
-        stream.name = providerDisplayName(stream);
+      // App sorts group streams alphabetically by name — rank-prefix so the
+      // alphabetical order reproduces the quality ranking (see chain.js).
+      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream, idx) {
+        stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " " + providerDisplayName(stream);
         return toNuvioStream(request, stream);
       });
     })

@@ -1043,8 +1043,8 @@ function getStreamsForRequest(request, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
   return resolveDesiSerials(request, { fetchImpl }).then(function(resolved) {
-    return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream) {
-      stream.name = providerDisplayName(stream);
+    return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream, idx) {
+      stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " " + providerDisplayName(stream);
       return toNuvioStream(request, stream);
     });
   }).catch(function(error) {
