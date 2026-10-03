@@ -340,7 +340,20 @@ var MONTH_NUM = {
   september: 8,
   october: 9,
   november: 10,
-  december: 11
+  december: 11,
+  // Abbreviated forms (tellynagari-style slugs: "27th-sep-2026")
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  sept: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11
 };
 var NON_EPISODE_RE = /promo|trailer|teaser|preview|spoiler|coming-soon|written-update|review/i;
 function slugTimestamp(href) {
@@ -421,8 +434,15 @@ function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVariants) {
     links2 = strict;
   }
   if (dateSlug) {
+    var dateVariants = [dateSlug];
+    var dm = dateSlug.match(/^(\d+\w{2})-([a-z]+)-(\d{4})$/);
+    if (dm)
+      dateVariants.push(dm[1] + "-" + dm[2].slice(0, 3) + "-" + dm[3]);
     var dated = links2.filter(function(href) {
-      return href.toLowerCase().indexOf(dateSlug) !== -1;
+      var lower = href.toLowerCase();
+      return dateVariants.some(function(v) {
+        return lower.indexOf(v) !== -1;
+      });
     });
     if (dated.length > 0)
       return dated;

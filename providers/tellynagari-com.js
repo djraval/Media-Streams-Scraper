@@ -32,8 +32,6 @@ var CHANNEL_SLUGS = {
   "starplus": ["star-plus"],
   "zee tv": ["zee-tv"]
 };
-var VKSPEED_HOSTS = ["vkspeed.com", "vkcdn5.com", "vkcdn6.com", "vkcdn7.com"];
-var VKPRIME_HOSTS = ["vkprime.com"];
 
 // src/lib/http.js
 function resolveFetch(options) {
@@ -125,15 +123,6 @@ function isPlaceholderUrl(url) {
   var lower = String(url || "").toLowerCase();
   return lower.indexOf("/ads/") !== -1 || lower.indexOf("127.0.0.1") !== -1;
 }
-function embedHostRegex(hosts, pathPattern) {
-  var escaped = hosts.map(function(h) {
-    return h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  });
-  return new RegExp(
-    "^https://(?:www\\.)?(?:" + escaped.join("|") + ")/" + pathPattern + "$",
-    "i"
-  );
-}
 function decodeText(raw) {
   var text = String(raw || "").replace(/&amp;/gi, "&").replace(/&#038;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
   var replacements = [
@@ -189,17 +178,6 @@ function attrValues(markup, tags, attrs) {
 }
 function links(markup) {
   return attrValues(markup, ["a", "link", "area"], ["href"]);
-}
-function iframeSrcCandidates(markup) {
-  return dedupe(
-    attrValues(markup, ["iframe"], [
-      "src",
-      "data-src",
-      "data-wpfc-original-src",
-      "data-lazy-src",
-      "data-litespeed-src"
-    ])
-  );
 }
 
 // src/lib/tmdb.js
@@ -655,119 +633,195 @@ function toNuvioStream(request, stream) {
   };
 }
 
-// src/yodesionline-net/index.js
-var SITE_BASE = "https://yodesionline.net";
+// src/tellynagari-com/index.js
+var SITE_BASE = "https://tellynagari.com";
 var SEARCH_PATH = "/?s=";
-var SITE_HOST_RE = /^https:\/\/(?:www\.)?yodesionline\.net\//i;
-var VKPRIME_RE = embedHostRegex(VKPRIME_HOSTS, "embed-[A-Za-z0-9-]+\\.html");
-var VKSPEED_RE = embedHostRegex(VKSPEED_HOSTS, "embed-[A-Za-z0-9-]+\\.html");
+var SITE_HOST_RE = /^https:\/\/(?:www\.)?tellynagari\.com\//i;
+var NON_POST_RE = /\/(category|tag|author|page|wp-|feed|xmlrpc|comments)\b|\/20\d{2}(?:\/\d{2})?\/?$|\/(about|contact|dmca|privacy|terms)/i;
+var ARTICLEWEB = "https://articleweb.xyz/vid/";
+var GATE_MAP = {
+  girmeet: "gdrive",
+  kratike: "vkspeed"
+};
+var GATE_PROBES = ["gdrive", "vkspeed"];
+var YANDEX_RE = /(https?:\/\/streaming\.disk\.yandex\.net\/hls\/[^"'\s<>]+m3u8[^"'\s<>]*)/i;
+var GENERIC_M3U8_RE = /(https?:\/\/[^"'\s<>]+\.m3u8[^"'\s<>]*)/i;
+var VK_EMBED_RE = /(vkspeed\.com|vkprime\.com)\/embed-[A-Za-z0-9_-]+(?:-\d+x\d+)?\.html/i;
 function displayBackend2(backend) {
-  return String(backend || "source").replace(/(^|[-_\s]+)([a-z])/g, function(_match, prefix, ch) {
+  return String(backend || "source").replace(/(^|[-_\s]+)([a-z])/g, function(_m, prefix, ch) {
     return prefix + ch.toUpperCase();
   }).replace(/[-_]+/g, "");
 }
-function siteSlugCandidates(request) {
-  var candidates = request.slugCandidates || [];
-  return dedupe(candidates.map(function(slug) {
-    return slug.replace(/-s(?=-|$)/g, "s");
-  }).concat(candidates));
-}
-function buildEpisodeUrls(request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug)
-    return [];
-  return siteSlugCandidates(request).map(function(slug) {
-    return SITE_BASE + "/" + slug + "-" + dateSlug + "-full-episode/";
-  });
-}
 function buildSearchUrls(request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  var urls = siteSlugCandidates(request).slice(0, 2).map(function(slug) {
+  return (request.slugCandidates || []).slice(0, 3).map(function(slug) {
     return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug.replace(/-/g, " ")).replace(/%20/g, "+");
   });
-  if (dateSlug) {
-    var dateQuery = dateSlug.replace(/-/g, " ");
-    urls = siteSlugCandidates(request).slice(0, 2).map(function(slug) {
-      return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
-    }).concat(urls);
-  }
-  return dedupe(urls);
 }
+var LATEST_WINDOW_MS = 10 * 24 * 60 * 60 * 1e3;
 function episodePageCandidates(markup, request) {
-  return episodePostCandidates(links(markup), request, SITE_HOST_RE);
-}
-function findPlayerIframes(markup) {
-  return dedupe(iframeSrcCandidates(markup).filter(function(href) {
-    return VKPRIME_RE.test(href) || VKSPEED_RE.test(href);
+  var hrefs = links(markup);
+  var strict = episodePostCandidates(hrefs, request, SITE_HOST_RE, NON_POST_RE);
+  if (strict.length > 0)
+    return strict;
+  if (request.airDate)
+    return [];
+  var dated = dedupe(hrefs.filter(function(href) {
+    return SITE_HOST_RE.test(href) && !NON_POST_RE.test(href) && slugTimestamp(href) > 0 && (request.slugCandidates || []).some(function(slug) {
+      return href.toLowerCase().indexOf(slug) !== -1;
+    });
   }));
+  if (dated.length !== 1)
+    return [];
+  var ts = slugTimestamp(dated[0]);
+  if (Math.abs(Date.now() - ts) > LATEST_WINDOW_MS)
+    return [];
+  return dated;
 }
-function findEmbedsFromPages(fetchImpl, urls) {
-  return fetchFirstResult(fetchImpl, urls, { headers: BROWSER_HEADERS }, function(page) {
-    var embeds = findPlayerIframes(page);
-    return embeds.length > 0 ? embeds : null;
+function findGateLinks(markup) {
+  var gates = [];
+  var re = /<a\b[^>]*itm\('([^']+)'\)[^>]*>([^<]*)<\/a>/gi;
+  var m;
+  while ((m = re.exec(markup)) !== null) {
+    var gateMatch = m[1].match(/\/usn\/([A-Za-z0-9_-]+)\.php\?.*docid=([A-Za-z0-9_-]+)/i);
+    if (!gateMatch)
+      continue;
+    var labelMatch = m[2].match(/\(([^)]+)\)/);
+    gates.push({
+      gate: gateMatch[1],
+      docid: gateMatch[2],
+      label: labelMatch ? labelMatch[1] : gateMatch[1]
+    });
+  }
+  var seen = {};
+  return gates.filter(function(g) {
+    var key = g.gate + "|" + g.docid;
+    if (seen[key])
+      return false;
+    seen[key] = true;
+    return true;
   });
 }
-function resolveEmbeds(fetchImpl, iframeUrls) {
-  if (!iframeUrls || iframeUrls.length === 0)
-    return Promise.resolve([]);
-  return Promise.all(iframeUrls.map(function(iframeUrl) {
-    var backend = iframeUrl.toLowerCase().indexOf("vkspeed") !== -1 ? "vkspeed" : "vkprime";
-    return resolveVkPlayer(iframeUrl, SITE_BASE + "/", { fetchImpl }).then(function(sources) {
-      var real = (sources || []).filter(function(source) {
-        return !isPlaceholderUrl(source.url);
-      });
-      if (real.length === 0)
+function findGatesFromPages(fetchImpl, urls) {
+  return fetchFirstResult(fetchImpl, urls, { headers: BROWSER_HEADERS }, function(page) {
+    var gates = findGateLinks(page);
+    return gates.length > 0 ? { gates, pageUrl: urls[0] } : null;
+  }).then(function(hit) {
+    return hit ? hit.gates : [];
+  });
+}
+function candidatePaths(gate) {
+  var paths = [];
+  if (GATE_MAP[gate])
+    paths.push(GATE_MAP[gate]);
+  GATE_PROBES.forEach(function(p) {
+    if (paths.indexOf(p) === -1)
+      paths.push(p);
+  });
+  return paths;
+}
+function resolveGate(fetchImpl, gate, docid, referer) {
+  var paths = candidatePaths(gate);
+  var idx = 0;
+  function tryNext() {
+    if (idx >= paths.length)
+      return Promise.resolve(null);
+    var pageUrl = ARTICLEWEB + paths[idx] + ".php?id=" + encodeURIComponent(docid);
+    idx += 1;
+    return fetchImpl(pageUrl, { headers: { Referer: referer, "User-Agent": BROWSER_HEADERS["User-Agent"] } }).then(function(res) {
+      return res ? res.text() : null;
+    }).then(function(page) {
+      if (!page)
+        return tryNext();
+      var yx = page.match(YANDEX_RE) || page.match(GENERIC_M3U8_RE);
+      if (yx) {
+        return { kind: "hls", backend: "yandex", url: yx[1] };
+      }
+      var vk = page.match(VK_EMBED_RE);
+      if (vk) {
+        return { kind: "vk", backend: "vkspeed", url: "https://" + vk[0] };
+      }
+      return tryNext();
+    }).catch(function() {
+      return tryNext();
+    });
+  }
+  return tryNext();
+}
+function toStream(fetchImpl, resolved, label, referer) {
+  if (resolved.kind === "hls") {
+    return Promise.resolve({
+      backend: resolved.backend,
+      kind: "hls",
+      quality: "",
+      url: resolved.url,
+      size: "",
+      sizeBytes: 0,
+      sourceTag: label,
+      headers: null
+    });
+  }
+  return resolveVkPlayer(resolved.url, referer, { fetchImpl }).then(function(sources) {
+    var real = (sources || []).filter(function(s) {
+      return !isPlaceholderUrl(s.url);
+    });
+    if (real.length === 0)
+      return null;
+    var best = real[0];
+    var stream = {
+      backend: resolved.backend,
+      kind: "mp4",
+      quality: best.quality || "unknown",
+      url: best.url,
+      size: "",
+      sizeBytes: 0,
+      sourceTag: label,
+      headers: best.headers
+    };
+    return fetchContentLength(fetchImpl, best.url, best.headers).then(function(sizeBytes) {
+      stream.size = formatBytes(sizeBytes);
+      stream.sizeBytes = sizeBytes;
+      return stream;
+    });
+  });
+}
+function resolveGates(fetchImpl, gates, referer) {
+  return Promise.all(gates.map(function(g) {
+    return resolveGate(fetchImpl, g.gate, g.docid, referer).then(function(resolved) {
+      if (!resolved)
         return null;
-      var best = real[0];
-      var stream = {
-        backend,
-        kind: "mp4",
-        quality: best.quality || "unknown",
-        url: best.url,
-        size: "",
-        sizeBytes: 0,
-        sourceTag: "",
-        headers: best.headers
-      };
-      return fetchContentLength(fetchImpl, best.url, best.headers).then(function(sizeBytes) {
-        stream.size = formatBytes(sizeBytes);
-        stream.sizeBytes = sizeBytes;
-        return stream;
-      });
+      return toStream(fetchImpl, resolved, g.label, referer);
     }).catch(function(error) {
-      console.log("[YoDesiOnline.net] player resolution failed for " + iframeUrl + ": " + (error && error.message));
+      console.log("[TellyNagari] gate " + g.gate + " failed: " + (error && error.message));
       return null;
     });
-  })).then(function(resolved) {
-    return dedupeStreams(resolved);
+  })).then(function(streams) {
+    return streams.filter(function(s) {
+      return s !== null;
+    });
   });
 }
-function resolveYoDesiOnline(request, options) {
+function resolveTellyNagari(request, options) {
   options = options || {};
   var fetchImpl = resolveFetch(options);
-  return findEmbedsFromPages(fetchImpl, buildEpisodeUrls(request)).then(function(embeds) {
-    if (embeds)
-      return resolveEmbeds(fetchImpl, embeds);
-    return fetchFirstResult(fetchImpl, buildSearchUrls(request), { headers: BROWSER_HEADERS }, function(page) {
-      var episodeUrls = episodePageCandidates(page, request);
-      return episodeUrls.length > 0 ? episodeUrls : null;
-    }).then(function(episodeUrls) {
-      if (!episodeUrls)
-        return [];
-      return findEmbedsFromPages(fetchImpl, episodeUrls).then(function(searchEmbeds) {
-        return searchEmbeds ? resolveEmbeds(fetchImpl, searchEmbeds) : [];
-      });
+  return fetchFirstResult(fetchImpl, buildSearchUrls(request), { headers: BROWSER_HEADERS }, function(page) {
+    var episodeUrls = episodePageCandidates(page, request);
+    return episodeUrls.length > 0 ? episodeUrls : null;
+  }).then(function(episodeUrls) {
+    if (!episodeUrls)
+      return [];
+    return findGatesFromPages(fetchImpl, episodeUrls).then(function(gates) {
+      return resolveGates(fetchImpl, gates.slice(0, 6), episodeUrls[0] || SITE_BASE + "/");
     });
   });
 }
 function getStreamsForRequest(request, options) {
-  return resolveYoDesiOnline(request, options).then(function(resolved) {
+  return resolveTellyNagari(request, options).then(function(resolved) {
     return dedupeStreams(resolved).map(function(stream) {
-      stream.name = "YoDesiOnline.net " + displayBackend2(stream.backend);
+      stream.name = "TellyNagari " + displayBackend2(stream.backend) + (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
       return toNuvioStream(request, stream);
     });
   }).catch(function(error) {
-    console.log("[YoDesiOnline.net] resolver failed: " + error.message);
+    console.log("[TellyNagari] resolver failed: " + error.message);
     return [];
   });
 }
@@ -777,7 +831,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
   return buildMediaRequest(tmdbId, mediaType, season, episode, { tmdbApiKey: TMDB_API_KEY }).then(function(request) {
     return getStreamsForRequest(request, { fetchImpl: typeof fetch !== "undefined" ? fetch : null });
   }).catch(function(error) {
-    console.log("[YoDesiOnline.net] getStreams failed: " + error.message);
+    console.log("[TellyNagari] getStreams failed: " + error.message);
     return [];
   });
 }

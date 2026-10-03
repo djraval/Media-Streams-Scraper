@@ -10,6 +10,9 @@ import { episodeDateSlug } from "./tmdb.js";
 var MONTH_NUM = {
   january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
   july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+  // Abbreviated forms (tellynagari-style slugs: "27th-sep-2026")
+  jan: 0, feb: 1, mar: 2, apr: 3, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8,
+  oct: 9, nov: 10, dec: 11,
 };
 
 var NON_EPISODE_RE = /promo|trailer|teaser|preview|spoiler|coming-soon|written-update|review/i;
@@ -108,9 +111,14 @@ export function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVari
   }
 
   // 1. Exact air-date slug — highest confidence, keeps multi-post episodes.
+  //    Accept abbreviated months too ("27th-sep-2026" == "27th-september-2026").
   if (dateSlug) {
+    var dateVariants = [dateSlug];
+    var dm = dateSlug.match(/^(\d+\w{2})-([a-z]+)-(\d{4})$/);
+    if (dm) dateVariants.push(dm[1] + "-" + dm[2].slice(0, 3) + "-" + dm[3]);
     var dated = links.filter(function (href) {
-      return href.toLowerCase().indexOf(dateSlug) !== -1;
+      var lower = href.toLowerCase();
+      return dateVariants.some(function (v) { return lower.indexOf(v) !== -1; });
     });
     if (dated.length > 0) return dated;
   }
