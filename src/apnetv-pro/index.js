@@ -11,7 +11,7 @@ import { resolveFetch, fetchText, fetchFirstResult } from "../lib/http.js";
 import { dedupe, dedupeStreams, links } from "../lib/html.js";
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { episodePostCandidates } from "../lib/episodes.js";
-import { toNuvioStream } from "../lib/format.js";
+import { toNuvioStream, sortStreamsBest } from "../lib/format.js";
 import {
   dramavideoParamsFromMarkup,
   resolveDramavideoEmbed,
@@ -113,8 +113,9 @@ function resolveApneTV(request, options) {
 function getStreamsForRequest(request, options) {
   return resolveApneTV(request, options)
     .then(function (resolved) {
-      return dedupeStreams(resolved).map(function (stream) {
-        stream.name = "ApneTV " + stream.backend;
+      // App sorts group streams alphabetically by name — rank-prefix (see chain.js).
+      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream, idx) {
+        stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " ApneTV " + stream.backend;
         return toNuvioStream(request, stream);
       });
     })

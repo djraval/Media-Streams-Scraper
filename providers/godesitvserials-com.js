@@ -466,6 +466,29 @@ function bitrateLabel(sizeBytes, runtimeMinutes) {
 function displayBackend(backend) {
   return String(backend || "source");
 }
+function sortStreamsBest(streams, runtimeMinutes) {
+  var minutes = Number(runtimeMinutes) || 0;
+  var res = function(stream) {
+    var m = /(\d{3,4})\s*p/i.exec(String(stream.quality || ""));
+    return m ? Number(m[1]) : 0;
+  };
+  var labelBitrate = function(stream) {
+    var m = /(\d+(?:\.\d+)?)\s*Mbps/i.exec(String(stream.quality || ""));
+    return m ? Number(m[1]) * 1e6 : 0;
+  };
+  var score = function(stream) {
+    var bw = stream.bandwidth || labelBitrate(stream);
+    if (!bw) {
+      var size = Number(stream.sizeBytes) || 0;
+      bw = size > 0 ? size * 8 / ((minutes > 0 ? minutes : 60) * 60) : 0;
+    }
+    var r = res(stream);
+    return bw * (r > 0 ? Math.min(r, 2160) / 720 : 1);
+  };
+  return streams.slice().sort(function(a, b) {
+    return score(b) - score(a);
+  });
+}
 function episodeLabel(request) {
   var season = String(request.season || 0).padStart(2, "0");
   var episode = String(request.episode || 0).padStart(2, "0");
@@ -901,8 +924,8 @@ function resolveGoDesi(request, options) {
 }
 function getStreamsForRequest(request, options) {
   return resolveGoDesi(request, options).then(function(resolved) {
-    return dedupeStreams(resolved).map(function(stream) {
-      stream.name = "GoDesiTVSerials " + stream.backend;
+    return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream, idx) {
+      stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " GoDesiTVSerials " + stream.backend;
       return toNuvioStream(request, stream);
     });
   }).catch(function(error) {

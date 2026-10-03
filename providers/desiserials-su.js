@@ -890,6 +890,29 @@ function bitrateLabel(sizeBytes, runtimeMinutes) {
 function displayBackend(backend) {
   return String(backend || "source");
 }
+function sortStreamsBest(streams, runtimeMinutes) {
+  var minutes = Number(runtimeMinutes) || 0;
+  var res = function(stream) {
+    var m = /(\d{3,4})\s*p/i.exec(String(stream.quality || ""));
+    return m ? Number(m[1]) : 0;
+  };
+  var labelBitrate = function(stream) {
+    var m = /(\d+(?:\.\d+)?)\s*Mbps/i.exec(String(stream.quality || ""));
+    return m ? Number(m[1]) * 1e6 : 0;
+  };
+  var score = function(stream) {
+    var bw = stream.bandwidth || labelBitrate(stream);
+    if (!bw) {
+      var size = Number(stream.sizeBytes) || 0;
+      bw = size > 0 ? size * 8 / ((minutes > 0 ? minutes : 60) * 60) : 0;
+    }
+    var r = res(stream);
+    return bw * (r > 0 ? Math.min(r, 2160) / 720 : 1);
+  };
+  return streams.slice().sort(function(a, b) {
+    return score(b) - score(a);
+  });
+}
 function episodeLabel(request) {
   var season = String(request.season || 0).padStart(2, "0");
   var episode = String(request.episode || 0).padStart(2, "0");
@@ -1069,15 +1092,23 @@ function resolveBackend(url, referer, fetchImpl, ctx) {
     });
   }
   if (M3U8_RE.test(url)) {
-    return Promise.resolve({
-      backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
-      kind: "hls",
-      quality: "",
-      url,
-      size: "",
-      sizeBytes: 0,
-      sourceTag: ctx.label || "",
-      headers: null
+    return fetchText(fetchImpl, url, referer ? { headers: { Referer: referer } } : void 0).then(function(raw) {
+      var variants = raw ? parseHlsMasterPlaylist(raw, url) : [];
+      var top = variants[0] || {};
+      var best = variants.reduce(function(acc, v) {
+        return v.bandwidth > (acc.bandwidth || 0) ? v : acc;
+      }, top);
+      return {
+        backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
+        kind: "hls",
+        quality: top.height ? top.height + "p" : "",
+        bandwidth: best.bandwidth || 0,
+        url,
+        size: "",
+        sizeBytes: 0,
+        sourceTag: ctx.label || "",
+        headers: null
+      };
     });
   }
   if (MP4_RE.test(url)) {
@@ -1318,12 +1349,14 @@ function chainProvider(cfg) {
   }
   function getStreamsForRequest(request, options) {
     return resolveRequest(request, options).then(function(resolved) {
-      return dedupeStreams(resolved).map(function(stream) {
+      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream, idx) {
+        var base;
         if (cfg.streamName) {
-          stream.name = cfg.streamName(stream);
+          base = cfg.streamName(stream);
         } else {
-          stream.name = cfg.name + " " + displayBackend2(stream.backend) + (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
+          base = cfg.name + " " + displayBackend2(stream.backend) + (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
         }
+        stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " " + base;
         return toNuvioStream(request, stream);
       });
     }).catch(function(error) {

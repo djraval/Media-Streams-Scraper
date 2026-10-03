@@ -18,15 +18,15 @@
 // page it was found on — flow.tvlogy.to 403s on any other referer.
 
 import { BROWSER_HEADERS } from "./constants.js";
-import { resolveFetch, fetchFirstResult, fetchContentLength, fetchJson, cachingFetch } from "./http.js";
+import { resolveFetch, fetchFirstResult, fetchContentLength, fetchJson, cachingFetch, fetchText } from "./http.js";
 import { dedupe, dedupeStreams, isPlaceholderUrl, links, resolveRelativeUrl, decodeText } from "./html.js";
 import { buildMediaRequest, episodeDateSlug } from "./tmdb.js";
 import { episodePostCandidates } from "./episodes.js";
 import { resolveVkPlayer } from "./vkplayer.js";
-import { resolveFlowPlayer } from "./flow.js";
+import { resolveFlowPlayer, parseHlsMasterPlaylist } from "./flow.js";
 import { resolveUpbolt, UPBOLT_RE } from "./upbolt.js";
 import { TMDB_API_KEY } from "./constants.js";
-import { toNuvioStream, formatBytes } from "./format.js";
+import { toNuvioStream, formatBytes, sortStreamsBest } from "./format.js";
 
 // ---------------------------------------------------------------------------
 // Backend recognition — dispatched purely on URL shape
@@ -186,18 +186,29 @@ function resolveBackend(url, referer, fetchImpl, ctx) {
     });
   }
 
-  // Direct HLS (yandex disk, anything .m3u8)
+  // Direct HLS (yandex disk, anything .m3u8). Probe the master playlist so the
+  // label carries real quality — "720p • 5.4 Mbps" — letting users pick the
+  // high-bitrate copy instead of a same-resolution low-bitrate mirror.
   if (M3U8_RE.test(url)) {
-    return Promise.resolve({
-      backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
-      kind: "hls",
-      quality: "",
-      url: url,
-      size: "",
-      sizeBytes: 0,
-      sourceTag: ctx.label || "",
-      headers: null,
-    });
+    return fetchText(fetchImpl, url, referer ? { headers: { Referer: referer } } : undefined)
+      .then(function (raw) {
+        var variants = raw ? parseHlsMasterPlaylist(raw, url) : [];
+        var top = variants[0] || {};
+        var best = variants.reduce(function (acc, v) {
+          return v.bandwidth > (acc.bandwidth || 0) ? v : acc;
+        }, top);
+        return {
+          backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
+          kind: "hls",
+          quality: top.height ? top.height + "p" : "",
+          bandwidth: best.bandwidth || 0,
+          url: url,
+          size: "",
+          sizeBytes: 0,
+          sourceTag: ctx.label || "",
+          headers: null,
+        };
+      });
   }
 
   // Direct MP4
@@ -468,14 +479,20 @@ export function chainProvider(cfg) {
   function getStreamsForRequest(request, options) {
     return resolveRequest(request, options)
       .then(function (resolved) {
-        return dedupeStreams(resolved).map(function (stream) {
+        // The app sorts each group's streams alphabetically by name
+        // (StreamFetchSupportKt.sortedForGroupedDisplay) — array order is
+        // ignored. Rank-prefix the name so that alphabetical order reproduces
+        // our quality ranking: "01 …" is each provider's best stream.
+        return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream, idx) {
+          var base;
           if (cfg.streamName) {
-            stream.name = cfg.streamName(stream);
+            base = cfg.streamName(stream);
           } else {
-            stream.name =
+            base =
               cfg.name + " " + displayBackend(stream.backend) +
               (stream.sourceTag ? " (" + stream.sourceTag + ")" : "");
           }
+          stream.name = (idx < 9 ? "0" : "") + (idx + 1) + " " + base;
           return toNuvioStream(request, stream);
         });
       })
