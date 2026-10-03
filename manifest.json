@@ -122,7 +122,7 @@
     {
       "id": "desitvbox-sbs",
       "name": "DesiTvBox.sbs",
-      "filename": "desitvbox-sbs.js?v=3.9.0",
+      "filename": "providers/desitvbox-sbs.js?v=3.9.0",
       "mediaTypes": [
         "tv"
       ],
@@ -135,7 +135,7 @@
     {
       "id": "desitellybox-to",
       "name": "DesiTellyBox.to",
-      "filename": "desitellybox-to.js?v=3.9.0",
+      "filename": "providers/desitellybox-to.js?v=3.9.0",
       "mediaTypes": [
         "tv"
       ],
@@ -148,7 +148,7 @@
     {
       "id": "tellynagari-com",
       "name": "TellyNagari.com",
-      "filename": "tellynagari-com.js?v=3.9.0",
+      "filename": "providers/tellynagari-com.js?v=3.9.0",
       "mediaTypes": [
         "tv"
       ],
@@ -161,7 +161,7 @@
     {
       "id": "yodesi-net",
       "name": "YoDesi.net",
-      "filename": "yodesi-net.js?v=3.9.0",
+      "filename": "providers/yodesi-net.js?v=3.9.0",
       "mediaTypes": [
         "tv"
       ],
@@ -173,7 +173,7 @@
     {
       "id": "desiserials-su",
       "name": "DesiSerials.su",
-      "filename": "desiserials-su.js?v=3.9.0",
+      "filename": "providers/desiserials-su.js?v=3.9.0",
       "mediaTypes": [
         "tv"
       ],
@@ -183,11 +183,14 @@
       "enabled": true
     },
     {
+      "id": "bollyzone-to",
       "name": "Bollyzone.to",
       "filename": "providers/bollyzone-to.js?v=3.9.0",
-      "description": "Flow HLS via groundbanks/freeshorturls referer-masked hop from bollyzone.to",
       "mediaTypes": [
         "tv"
+      ],
+      "formats": [
+        "hls"
       ],
       "enabled": true
     }
