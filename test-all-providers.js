@@ -5,6 +5,8 @@ var providers = {
   'desi-serials-to': require('./providers/desi-serials-to.js'),
   'desiruleztv-net': require('./providers/desiruleztv-net.js'),
   'yodesionline-net': require('./providers/yodesionline-net.js'),
+  'godesitvserials-com': require('./providers/godesitvserials-com.js'),
+  'apnetv-pro': require('./providers/apnetv-pro.js'),
 };
 
 // TV content — daily soaps + trending shows
@@ -41,7 +43,7 @@ var movieContent = [
   { id: '872906', name: 'Jawan' },
 ];
 
-var tvProviders = ['desi-serials-to', 'desiruleztv-net', 'yodesionline-net'];
+var tvProviders = ['desi-serials-to', 'desiruleztv-net', 'yodesionline-net', 'godesitvserials-com', 'apnetv-pro'];
 var movieProviders = [];
 
 var TIMEOUT = 45000;

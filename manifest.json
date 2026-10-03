@@ -1,6 +1,6 @@
 {
   "name": "Desi-Serials Repo",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "scrapers": [
     {
       "id": "desi-serials-to",
@@ -67,6 +67,53 @@
       ],
       "formats": [
         "mp4"
+      ],
+      "limited": true,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "godesitvserials-com",
+      "name": "GoDesiTVSerials.com",
+      "description": "Indian TV resolver using godesitvserials.com token API (MegaPlays MP4, Yandex HLS) plus DramaVideo embeds.",
+      "version": "3.1.0",
+      "author": "djraval",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/godesitvserials-com.js?v=3.1.0",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": [
+        "hi",
+        "en"
+      ],
+      "formats": [
+        "mp4",
+        "hls"
+      ],
+      "limited": true,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    },
+    {
+      "id": "apnetv-pro",
+      "name": "ApneTV.pro",
+      "description": "Indian TV resolver using apnetv.pro with DramaVideo player support.",
+      "version": "3.1.0",
+      "author": "djraval",
+      "supportedTypes": [
+        "tv"
+      ],
+      "filename": "providers/apnetv-pro.js?v=3.1.0",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": [
+        "hi",
+        "en"
+      ],
+      "formats": [
+        "hls"
       ],
       "limited": true,
       "disabledPlatforms": [],
