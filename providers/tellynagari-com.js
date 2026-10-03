@@ -728,6 +728,54 @@ function resolveFlowPlayer(playerUrl, refererUrl, options) {
   });
 }
 
+// src/lib/upbolt.js
+var CRAWLER_UA = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)";
+var UPBOLT_RE = /upbolt\.to\/(?:emb-|e\/)[A-Za-z0-9_-]+/i;
+function resolveUpbolt(embedUrl, options) {
+  options = options || {};
+  var fetchImpl = resolveFetch(options);
+  if (embedUrl.indexOf("http") !== 0) {
+    embedUrl = "https://" + embedUrl.replace(/^\/\//, "");
+  }
+  var crawler = { headers: { "User-Agent": CRAWLER_UA, Accept: "*/*" } };
+  return fetchText(fetchImpl, embedUrl, crawler).then(function(html) {
+    if (!html)
+      return null;
+    var m = html.match(/sources\s*:\s*\[\s*\{[^}]*?file\s*:\s*["']([^"']+\.m3u8[^"']*)/i) || html.match(/["'](https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)["']/i);
+    if (!m)
+      return null;
+    var masterUrl = m[1].replace(/\\\//g, "/");
+    var tag = "";
+    var tm = html.match(/<title>([^<]+)<\/title>/i);
+    if (tm)
+      tag = tm[1].trim();
+    return fetchText(fetchImpl, masterUrl, crawler).then(function(manifest) {
+      var stream = {
+        backend: "upbolt",
+        kind: "hls",
+        quality: "",
+        url: masterUrl,
+        size: "",
+        sizeBytes: 0,
+        sourceTag: tag,
+        // The signed token is bound to the issuing UA class: playlist fetches
+        // must carry the crawler UA (the media segments are open). Nuvio applies
+        // stream.headers to playlist requests, same as Flow's Referer+UA.
+        headers: { "User-Agent": CRAWLER_UA }
+      };
+      if (manifest) {
+        var variants = parseHlsMasterPlaylist(manifest, masterUrl);
+        if (variants.length > 0) {
+          if (variants[0].height > 0)
+            stream.quality = variants[0].height + "p";
+          stream.bandwidth = variants[0].bandwidth;
+        }
+      }
+      return stream;
+    });
+  });
+}
+
 // src/lib/format.js
 function formatBytes(bytes) {
   var value = Number(bytes);
@@ -931,6 +979,15 @@ function resolveBackend(url, referer, fetchImpl, ctx) {
       return stream;
     });
   }
+  if (UPBOLT_RE.test(url)) {
+    return resolveUpbolt(url.indexOf("http") === 0 ? url : "https://" + url, {
+      fetchImpl
+    }).then(function(stream) {
+      if (stream && ctx.label && !stream.sourceTag)
+        stream.sourceTag = ctx.label;
+      return stream;
+    });
+  }
   if (M3U8_RE.test(url)) {
     return Promise.resolve({
       backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
@@ -968,6 +1025,9 @@ function candidateKey(url) {
   if (m = url.match(/media_meta\.php\?v=([^&]+)/i)) {
     return "meta:" + m[1];
   }
+  if (m = url.match(/upbolt\.to\/(?:emb-|e\/)([A-Za-z0-9_-]+)/i)) {
+    return "upbolt:" + m[1];
+  }
   return url;
 }
 function partitionUrls(markup, pageUrl, cfg) {
@@ -996,7 +1056,7 @@ function partitionUrls(markup, pageUrl, cfg) {
     urls.forEach(function(u) {
       var url = u.url;
       var key = candidateKey(url);
-      if (MEDIA_META_RE.test(url) || VK_EMBED_RE.test(url) || FLOW_RE.test(url) || M3U8_RE.test(url) || MP4_RE.test(url)) {
+      if (MEDIA_META_RE.test(url) || VK_EMBED_RE.test(url) || FLOW_RE.test(url) || M3U8_RE.test(url) || MP4_RE.test(url) || UPBOLT_RE.test(url)) {
         if (!backendSeen[key]) {
           backendSeen[key] = true;
           backends.push({ url, label: u.label });

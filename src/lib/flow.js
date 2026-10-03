@@ -19,7 +19,7 @@ function hlsQualityFromManifest(raw) {
   return max > 0 ? max + "p" : "unknown";
 }
 
-function parseHlsMasterPlaylist(raw, baseUrl) {
+export function parseHlsMasterPlaylist(raw, baseUrl) {
   var variants = [];
   var lines = String(raw || "").split("\n");
   for (var i = 0; i < lines.length; i++) {

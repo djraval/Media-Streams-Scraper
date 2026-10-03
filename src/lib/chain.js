@@ -24,6 +24,7 @@ import { buildMediaRequest, episodeDateSlug } from "./tmdb.js";
 import { episodePostCandidates } from "./episodes.js";
 import { resolveVkPlayer } from "./vkplayer.js";
 import { resolveFlowPlayer } from "./flow.js";
+import { resolveUpbolt, UPBOLT_RE } from "./upbolt.js";
 import { TMDB_API_KEY } from "./constants.js";
 import { toNuvioStream, formatBytes } from "./format.js";
 
@@ -175,6 +176,16 @@ function resolveBackend(url, referer, fetchImpl, ctx) {
     });
   }
 
+  // UpBolt embed — CF-gated for browsers but crawler UAs get the player page
+  if (UPBOLT_RE.test(url)) {
+    return resolveUpbolt(url.indexOf("http") === 0 ? url : "https://" + url, {
+      fetchImpl: fetchImpl,
+    }).then(function (stream) {
+      if (stream && ctx.label && !stream.sourceTag) stream.sourceTag = ctx.label;
+      return stream;
+    });
+  }
+
   // Direct HLS (yandex disk, anything .m3u8)
   if (M3U8_RE.test(url)) {
     return Promise.resolve({
@@ -220,6 +231,9 @@ function candidateKey(url) {
   if ((m = url.match(/media_meta\.php\?v=([^&]+)/i))) {
     return "meta:" + m[1];
   }
+  if ((m = url.match(/upbolt\.to\/(?:emb-|e\/)([A-Za-z0-9_-]+)/i))) {
+    return "upbolt:" + m[1];
+  }
   return url;
 }
 
@@ -259,7 +273,7 @@ function partitionUrls(markup, pageUrl, cfg) {
       var key = candidateKey(url);
       if (
         MEDIA_META_RE.test(url) || VK_EMBED_RE.test(url) || FLOW_RE.test(url) ||
-        M3U8_RE.test(url) || MP4_RE.test(url)
+        M3U8_RE.test(url) || MP4_RE.test(url) || UPBOLT_RE.test(url)
       ) {
         if (!backendSeen[key]) {
           backendSeen[key] = true;

@@ -22,12 +22,13 @@ src/
     format.js            # formatBytes, formatDuration, toNuvioStream, bitrateLabel
     episodes.js          # episodePostCandidates — date-slug / "-episode-N" / chronological matching
     dramavideo.js        # DramaVideo resolver — data-embed/data-a+b attrs → AES-CBC → HLS
+    upbolt.js            # UpBolt resolver — crawler-UA CF bypass → signed HLS
   desi-serials-to/       # VkPrime/VkSpeed/Flow from desi-serials.to (TV only)
   desiruleztv-net/       # VkPrime/VkSpeed from desiruleztv.net (TV only)
   yodesionline-net/      # VkPrime/VkSpeed from yodesionline.net (TV only)
   godesitvserials-com/   # MegaPlays/Yandex via token API + DramaVideo (TV only)
   apnetv-pro/            # DramaVideo from apnetv.pro (TV only)
-  desitvbox-sbs/         # VkPrime/VkSpeed + local JW/Mobi/Fluid players → Yandex HLS (TV only)
+  desitvbox-sbs/         # VkPrime/VkSpeed + UpBolt HLS + local skins → Yandex HLS (TV only)
   desitellybox-to/       # Hop-chain (media.php/flix.php) → Flow + VkSpeed (TV only)
   tellynagari-com/       # tellyduniya gate → articleweb.xyz Yandex HLS + VkSpeed (TV only)
   yodesi-net/            # tvcine.me/player.php → flow.tvlogy.to HLS (TV only)
@@ -232,7 +233,16 @@ are ~40-120 lines of pure config:
   backends resolve with **the hop page as Referer** (the flow.tvlogy 403 rule
   is baked in: a backend is always resolved with the page it was found on).
 - **Dedupe by canonical id** — flow by flowId (4 player.php ids → 1 stream),
-  vk by embed id, meta by token.
+  vk by embed id, meta by token, upbolt by file_code.
+- **UpBolt backend (upbolt.to)** — Cloudflare managed challenge gates normal
+  clients, but the operator whitelists social link-preview crawlers: fetching
+  with `User-Agent: facebookexternalhit/1.1` (or Discordbot/Telegram/WhatsApp)
+  returns the real player page. `/emb-{id}` serves the jwplayer page directly;
+  `/e/{id}` is a poster shell — POST `op=embed&file_code={id}&auto=1` to `/dl`.
+  The page has a plaintext `sources:[{file:"...master.m3u8"}]` with signed
+  ~24h tokens on `edgeNN.upbolt.to/hls2/`. **Tokens are UA-bound**: every
+  playlist/segment request must carry the crawler UA — carried in
+  `stream.headers` (same mechanism as Flow's Referer+UA).
 - **transforms[]** — per-site URL rewrites that consume ad-gate URLs and emit
   the real destination(s): tellynagari `tellyduniya/usn/{gate}.php?docid` →
   `articleweb.xyz/vid/{gdrive,vkspeed}.php?id=`; desiserials `getlink.php?v&
