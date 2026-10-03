@@ -744,8 +744,13 @@ function providerDisplayName(stream) {
   }
   return name;
 }
+var FALLBACK_ARCHIVE_CHANNELS = ["zee-tv", "sony-tv", "star-plus", "color-tv-hd", "sab-tv-hd"];
+var FALLBACK_ARCHIVE_PAGES = 1;
+var MAPPED_ARCHIVE_PAGES = 3;
 function buildCandidateUrls(request) {
-  var channels = request.networkCandidates && request.networkCandidates.length > 0 ? request.networkCandidates : request.fallbackChannelSlugs;
+  var mapped = request.networkCandidates && request.networkCandidates.length > 0;
+  var channels = mapped ? request.networkCandidates : FALLBACK_ARCHIVE_CHANNELS;
+  var pages = mapped ? MAPPED_ARCHIVE_PAGES : FALLBACK_ARCHIVE_PAGES;
   var urls = [];
   for (var i = 0; i < channels.length; i++) {
     var channel = channels[i];
@@ -753,8 +758,9 @@ function buildCandidateUrls(request) {
     for (var j = 0; j < slugs.length; j++) {
       var slug = slugs[j];
       urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/");
-      urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/" + ARCHIVE_PAGE_PATH + "2/");
-      urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/" + ARCHIVE_PAGE_PATH + "3/");
+      for (var p = 2; p <= pages; p++) {
+        urls.push(SITE_BASE + WATCH_PATH + channel + "/" + slug + "/" + ARCHIVE_PAGE_PATH + p + "/");
+      }
     }
   }
   return { desiSerials: dedupe(urls) };
