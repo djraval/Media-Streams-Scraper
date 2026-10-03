@@ -346,7 +346,9 @@ function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVariants) {
   var dateSlug = episodeDateSlug(request.airDate);
   var ep = Number(request.episode || 0);
   var links2 = dedupe(
-    (hrefs || []).filter(function(href) {
+    (hrefs || []).map(function(href) {
+      return String(href || "").split("#")[0];
+    }).filter(function(href) {
       if (!hostRe.test(href))
         return false;
       if (rejectRe && rejectRe.test(href))

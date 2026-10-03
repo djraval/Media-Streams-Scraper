@@ -73,15 +73,21 @@ export function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVari
   var dateSlug = episodeDateSlug(request.airDate);
   var ep = Number(request.episode || 0);
   var links = dedupe(
-    (hrefs || []).filter(function (href) {
-      if (!hostRe.test(href)) return false;
-      if (rejectRe && rejectRe.test(href)) return false;
-      if (NON_EPISODE_RE.test(href)) return false;
-      var lower = href.toLowerCase();
-      return slugVariants.some(function (slug) {
-        return lower.indexOf(slug) !== -1;
-      });
-    }),
+    (hrefs || [])
+      // Fragments ("…/#respond") are not distinct posts — resolving them
+      // doubles every downstream fetch (each is a separate serial request).
+      .map(function (href) {
+        return String(href || "").split("#")[0];
+      })
+      .filter(function (href) {
+        if (!hostRe.test(href)) return false;
+        if (rejectRe && rejectRe.test(href)) return false;
+        if (NON_EPISODE_RE.test(href)) return false;
+        var lower = href.toLowerCase();
+        return slugVariants.some(function (slug) {
+          return lower.indexOf(slug) !== -1;
+        });
+      }),
   );
 
   // When the show title carries a year ("…-2026") but a link only matched via

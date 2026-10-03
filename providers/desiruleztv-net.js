@@ -97,6 +97,70 @@ function fetchJson(fetchImpl, url) {
     return response.json();
   });
 }
+function cachingFetch(fetchImpl) {
+  var cache = {};
+  return function(url, options) {
+    options = options || {};
+    var h = options.headers || {};
+    var key = (options.method || "GET") + "|" + url + "|" + (h["User-Agent"] || "") + "|" + (h.Referer || h.referer || "") + "|" + (typeof options.body === "string" ? options.body : "");
+    if (!cache[key]) {
+      cache[key] = fetchImpl(url, options).then(function(res) {
+        if (!res || res.ok === false) {
+          return { ok: false, status: res ? res.status : 0 };
+        }
+        var hdrs = {};
+        if (res.headers && typeof res.headers.get === "function") {
+          ["content-range", "content-length", "content-type"].forEach(function(n) {
+            hdrs[n] = res.headers.get(n);
+          });
+        }
+        return res.text().then(function(body) {
+          return { ok: true, status: res.status, statusText: res.statusText, url: res.url || url, body, headers: hdrs };
+        });
+      }).catch(function() {
+        return { ok: false, status: 0 };
+      });
+    }
+    return cache[key].then(function(cached) {
+      if (!cached || !cached.ok) {
+        return {
+          ok: false,
+          status: cached ? cached.status : 0,
+          text: function() {
+            return Promise.resolve("");
+          },
+          json: function() {
+            return Promise.resolve(null);
+          },
+          headers: { get: function() {
+            return null;
+          } }
+        };
+      }
+      return {
+        ok: true,
+        status: cached.status,
+        statusText: cached.statusText,
+        url: cached.url,
+        headers: {
+          get: function(name) {
+            return cached.headers[String(name).toLowerCase()] || null;
+          }
+        },
+        text: function() {
+          return Promise.resolve(cached.body);
+        },
+        json: function() {
+          try {
+            return Promise.resolve(JSON.parse(cached.body));
+          } catch (e) {
+            return Promise.resolve(null);
+          }
+        }
+      };
+    });
+  };
+}
 function fetchContentLength(fetchImpl, url, headers) {
   return fetchImpl(url, { method: "GET", headers: Object.assign({}, headers || {}, { Range: "bytes=0-0" }) }).then(function(response) {
     if (!response || response.ok === false)
@@ -413,7 +477,9 @@ function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVariants) {
   var dateSlug = episodeDateSlug(request.airDate);
   var ep = Number(request.episode || 0);
   var links2 = dedupe(
-    (hrefs || []).filter(function(href) {
+    (hrefs || []).map(function(href) {
+      return String(href || "").split("#")[0];
+    }).filter(function(href) {
       if (!hostRe.test(href))
         return false;
       if (rejectRe && rejectRe.test(href))
@@ -1205,7 +1271,7 @@ function chainProvider(cfg) {
   }
   function resolveRequest(request, options) {
     options = options || {};
-    var fetchImpl = resolveFetch(options);
+    var fetchImpl = cachingFetch(resolveFetch(options));
     var maxPosts = cfg.maxPosts || 2;
     function resolvePosts(urls) {
       if (!urls || urls.length === 0)

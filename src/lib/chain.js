@@ -18,7 +18,7 @@
 // page it was found on — flow.tvlogy.to 403s on any other referer.
 
 import { BROWSER_HEADERS } from "./constants.js";
-import { resolveFetch, fetchFirstResult, fetchContentLength, fetchJson } from "./http.js";
+import { resolveFetch, fetchFirstResult, fetchContentLength, fetchJson, cachingFetch } from "./http.js";
 import { dedupe, dedupeStreams, isPlaceholderUrl, links, resolveRelativeUrl, decodeText } from "./html.js";
 import { buildMediaRequest, episodeDateSlug } from "./tmdb.js";
 import { episodePostCandidates } from "./episodes.js";
@@ -420,7 +420,7 @@ export function chainProvider(cfg) {
 
   function resolveRequest(request, options) {
     options = options || {};
-    var fetchImpl = resolveFetch(options);
+    var fetchImpl = cachingFetch(resolveFetch(options));
     var maxPosts = cfg.maxPosts || 2;
 
     function resolvePosts(urls) {
