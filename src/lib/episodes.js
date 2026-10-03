@@ -145,7 +145,19 @@ export function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVari
     });
     var dates = Object.keys(byTs).map(Number).sort(function (a, b) { return a - b; });
     var target = dates[ep - 1];
-    if (target) return byTs[target];
+    if (target) {
+      // When TMDB knows the air date but no slug matched it (branches 1-2
+      // failed), a site that keeps only its latest post would otherwise hand
+      // the newest episode's streams to an older request. Verify the picked
+      // post is within ~2 days of the requested air date.
+      if (request.airDate) {
+        var airTs = Date.parse(request.airDate + "T00:00:00Z");
+        if (isNaN(airTs) || Math.abs(target - airTs) > 2 * 24 * 60 * 60 * 1000) {
+          return [];
+        }
+      }
+      return byTs[target];
+    }
   }
 
   return [];

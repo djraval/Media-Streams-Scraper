@@ -417,8 +417,15 @@ function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVariants) {
       return a - b;
     });
     var target = dates[ep - 1];
-    if (target)
+    if (target) {
+      if (request.airDate) {
+        var airTs = Date.parse(request.airDate + "T00:00:00Z");
+        if (isNaN(airTs) || Math.abs(target - airTs) > 2 * 24 * 60 * 60 * 1e3) {
+          return [];
+        }
+      }
       return byTs[target];
+    }
   }
   return [];
 }
