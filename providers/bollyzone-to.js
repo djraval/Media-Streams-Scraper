@@ -1069,15 +1069,23 @@ function resolveBackend(url, referer, fetchImpl, ctx) {
     });
   }
   if (M3U8_RE.test(url)) {
-    return Promise.resolve({
-      backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
-      kind: "hls",
-      quality: "",
-      url,
-      size: "",
-      sizeBytes: 0,
-      sourceTag: ctx.label || "",
-      headers: null
+    return fetchText(fetchImpl, url, referer ? { headers: { Referer: referer } } : void 0).then(function(raw) {
+      var variants = raw ? parseHlsMasterPlaylist(raw, url) : [];
+      var top = variants[0] || {};
+      var best = variants.reduce(function(acc, v) {
+        return v.bandwidth > (acc.bandwidth || 0) ? v : acc;
+      }, top);
+      return {
+        backend: url.indexOf("yandex") !== -1 ? "yandex" : "hls",
+        kind: "hls",
+        quality: top.height ? top.height + "p" : "",
+        bandwidth: best.bandwidth || 0,
+        url,
+        size: "",
+        sizeBytes: 0,
+        sourceTag: ctx.label || "",
+        headers: null
+      };
     });
   }
   if (MP4_RE.test(url)) {
