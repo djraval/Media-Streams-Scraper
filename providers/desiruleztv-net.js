@@ -320,6 +320,134 @@ function buildMediaRequest(tmdbId, mediaType, season, episode, options) {
   return Promise.reject(new Error("Unsupported media type: " + mediaType));
 }
 
+// src/lib/episodes.js
+var MONTH_NUM = {
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11
+};
+var NON_EPISODE_RE = /promo|trailer|teaser|preview|spoiler|coming-soon|written-update|review/i;
+function slugTimestamp(href) {
+  var lower = String(href || "").toLowerCase();
+  var m = lower.match(/(\d{1,2})(?:st|nd|rd|th)-([a-z]+)-(\d{4})/);
+  if (m && MONTH_NUM[m[2]] !== void 0) {
+    return Date.UTC(Number(m[3]), MONTH_NUM[m[2]], Number(m[1]));
+  }
+  m = lower.match(/([a-z]+)-(\d{1,2})(?:st|nd|rd|th)-(\d{4})/);
+  if (m && MONTH_NUM[m[1]] !== void 0) {
+    return Date.UTC(Number(m[3]), MONTH_NUM[m[1]], Number(m[2]));
+  }
+  return 0;
+}
+function postSlugVariants(request) {
+  var candidates = request.slugCandidates || [];
+  var extra = [];
+  for (var i = 0; i < candidates.length; i++) {
+    var stripped = candidates[i].replace(/-\d{4}$/, "");
+    if (stripped !== candidates[i]) {
+      extra.push(stripped);
+    }
+    extra.push(candidates[i].replace(/-s(?=-|$)/g, "s"));
+  }
+  return dedupe(candidates.concat(extra));
+}
+function hasYearSuffix(slugCandidates2) {
+  return (slugCandidates2 || []).some(function(slug) {
+    return /-\d{4}$/.test(slug);
+  });
+}
+function showYear(slugCandidates2) {
+  for (var i = 0; i < (slugCandidates2 || []).length; i++) {
+    var m = slugCandidates2[i].match(/-(\d{4})$/);
+    if (m)
+      return m[1];
+  }
+  return "";
+}
+function episodePostCandidates(hrefs, request, hostRe, rejectRe, slugVariants) {
+  slugVariants = slugVariants || postSlugVariants(request);
+  var dateSlug = episodeDateSlug(request.airDate);
+  var ep = Number(request.episode || 0);
+  var links2 = dedupe(
+    (hrefs || []).filter(function(href) {
+      if (!hostRe.test(href))
+        return false;
+      if (rejectRe && rejectRe.test(href))
+        return false;
+      if (NON_EPISODE_RE.test(href))
+        return false;
+      var lower = href.toLowerCase();
+      return slugVariants.some(function(slug) {
+        return lower.indexOf(slug) !== -1;
+      });
+    })
+  );
+  var year = showYear(request.slugCandidates);
+  if (year && hasYearSuffix(request.slugCandidates)) {
+    var fullSlug = (request.slugCandidates || []).filter(function(s) {
+      return s.indexOf("-" + year) !== -1;
+    });
+    var strict = links2.filter(function(href) {
+      var lower = href.toLowerCase();
+      return fullSlug.some(function(slug) {
+        return lower.indexOf(slug) !== -1;
+      });
+    });
+    if (strict.length === 0) {
+      strict = links2.filter(function(href) {
+        var lower = href.toLowerCase();
+        if (lower.indexOf(year) !== -1)
+          return true;
+        var ts = slugTimestamp(href);
+        return ts > 0 && new Date(ts).getUTCFullYear() === Number(year);
+      });
+    }
+    links2 = strict;
+  }
+  if (dateSlug) {
+    var dated = links2.filter(function(href) {
+      return href.toLowerCase().indexOf(dateSlug) !== -1;
+    });
+    if (dated.length > 0)
+      return dated;
+  }
+  if (ep > 0) {
+    var epRe = new RegExp("episode-" + ep + "(?:[/-]|$)");
+    var numbered = links2.filter(function(href) {
+      return epRe.test(href.toLowerCase());
+    });
+    if (numbered.length > 0)
+      return numbered;
+  }
+  if (ep > 0) {
+    var byTs = {};
+    links2.forEach(function(href) {
+      var ts = slugTimestamp(href);
+      if (ts > 0) {
+        if (!byTs[ts])
+          byTs[ts] = [];
+        byTs[ts].push(href);
+      }
+    });
+    var dates = Object.keys(byTs).map(Number).sort(function(a, b) {
+      return a - b;
+    });
+    var target = dates[ep - 1];
+    if (target)
+      return byTs[target];
+  }
+  return [];
+}
+
 // src/lib/packer.js
 function packerEncode(n, base) {
   if (n === 0)
@@ -539,13 +667,16 @@ function findPlayerIframes(markup) {
 }
 function buildSearchUrls(request) {
   var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
-  var dateQuery = dateSlug.replace(/-/g, " ");
-  return (request.slugCandidates || []).slice(0, 2).map(function(slug) {
-    return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
+  var urls = (request.slugCandidates || []).slice(0, 2).map(function(slug) {
+    return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug.replace(/-/g, " ")).replace(/%20/g, "+");
   });
+  if (dateSlug) {
+    var dateQuery = dateSlug.replace(/-/g, " ");
+    urls = (request.slugCandidates || []).slice(0, 2).map(function(slug) {
+      return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
+    }).concat(urls);
+  }
+  return dedupe(urls);
 }
 function buildArchiveUrls(request) {
   var urls = [];
@@ -558,26 +689,7 @@ function buildArchiveUrls(request) {
   return dedupe(urls);
 }
 function episodePageCandidates(markup, request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
-  return dedupe(
-    links(markup).filter(function(href) {
-      if (!DESIRULEZ_HOST_RE.test(href)) {
-        return false;
-      }
-      if (href.includes("/category/")) {
-        return false;
-      }
-      if (!href.toLowerCase().includes(dateSlug)) {
-        return false;
-      }
-      return (request.slugCandidates || []).some(function(slug) {
-        return href.toLowerCase().includes(slug);
-      });
-    })
-  );
+  return episodePostCandidates(links(markup), request, DESIRULEZ_HOST_RE, /\/category\//i);
 }
 function resolveFromEpisodeUrls(fetchImpl, episodeUrls) {
   if (episodeUrls.length === 0) {

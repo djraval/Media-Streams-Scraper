@@ -7,6 +7,7 @@ import { TMDB_API_KEY, BROWSER_HEADERS, VKSPEED_HOSTS, VKPRIME_HOSTS } from "../
 import { resolveFetch, fetchText, fetchFirstResult, fetchContentLength } from "../lib/http.js";
 import { dedupe, dedupeStreams, isPlaceholderUrl, embedHostRegex, links, iframeSrcCandidates } from "../lib/html.js";
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
+import { episodePostCandidates } from "../lib/episodes.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
 import { toNuvioStream, formatBytes } from "../lib/format.js";
 
@@ -77,13 +78,16 @@ function findPlayerIframes(markup) {
 // Each URL encodes the show slug + episode date slug as the search query.
 function buildSearchUrls(request) {
   var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
-  var dateQuery = dateSlug.replace(/-/g, " ");
-  return (request.slugCandidates || []).slice(0, 2).map(function (slug) {
-    return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
+  var urls = (request.slugCandidates || []).slice(0, 2).map(function (slug) {
+    return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug.replace(/-/g, " ")).replace(/%20/g, "+");
   });
+  if (dateSlug) {
+    var dateQuery = dateSlug.replace(/-/g, " ");
+    urls = (request.slugCandidates || []).slice(0, 2).map(function (slug) {
+      return SITE_BASE + SEARCH_PATH + encodeURIComponent(slug + " " + dateQuery).replace(/%20/g, "+");
+    }).concat(urls);
+  }
+  return dedupe(urls);
 }
 
 // Build archive (category) page URLs for desiruleztv.net.
@@ -107,26 +111,7 @@ function buildArchiveUrls(request) {
 //   3. Contain the date slug (e.g. "15th-january-2024")
 //   4. Contain one of the show slug candidates
 function episodePageCandidates(markup, request) {
-  var dateSlug = episodeDateSlug(request.airDate);
-  if (!dateSlug) {
-    return [];
-  }
-  return dedupe(
-    links(markup).filter(function (href) {
-      if (!DESIRULEZ_HOST_RE.test(href)) {
-        return false;
-      }
-      if (href.includes("/category/")) {
-        return false;
-      }
-      if (!href.toLowerCase().includes(dateSlug)) {
-        return false;
-      }
-      return (request.slugCandidates || []).some(function (slug) {
-        return href.toLowerCase().includes(slug);
-      });
-    })
-  );
+  return episodePostCandidates(links(markup), request, DESIRULEZ_HOST_RE, /\/category\//i);
 }
 
 // ---------------------------------------------------------------------------
