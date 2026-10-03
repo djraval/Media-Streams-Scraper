@@ -26,7 +26,7 @@ import { resolveVkPlayer } from "./vkplayer.js";
 import { resolveFlowPlayer, parseHlsMasterPlaylist } from "./flow.js";
 import { resolveUpbolt, UPBOLT_RE } from "./upbolt.js";
 import { TMDB_API_KEY } from "./constants.js";
-import { toNuvioStream, formatBytes } from "./format.js";
+import { toNuvioStream, formatBytes, sortStreamsBest } from "./format.js";
 
 // ---------------------------------------------------------------------------
 // Backend recognition — dispatched purely on URL shape
@@ -479,7 +479,7 @@ export function chainProvider(cfg) {
   function getStreamsForRequest(request, options) {
     return resolveRequest(request, options)
       .then(function (resolved) {
-        return dedupeStreams(resolved).map(function (stream) {
+        return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream) {
           if (cfg.streamName) {
             stream.name = cfg.streamName(stream);
           } else {

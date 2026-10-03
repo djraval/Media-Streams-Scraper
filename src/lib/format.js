@@ -55,6 +55,33 @@ export function displayBackend(backend) {
   return String(backend || "source");
 }
 
+// Best-first ordering for a provider's returned streams. The app preserves each
+// provider's array order inside its group (groups themselves sort by installed
+// order, not quality), so the only "best on top" we control is within a group.
+//
+// Rank by effective bitrate — HLS master BANDWIDTH when the backend exposed it,
+// else size-derived bitrate (all streams serve the same video → same runtime →
+// size ordering == bitrate ordering). Resolution is only a tiebreaker: a
+// "1080p" reencode must never outrank a high-bitrate 720p original.
+export function sortStreamsBest(streams, runtimeMinutes) {
+  var minutes = Number(runtimeMinutes) || 0;
+  var score = function (stream) {
+    if (stream.bandwidth) return stream.bandwidth;
+    var size = Number(stream.sizeBytes) || 0;
+    if (size > 0 && minutes > 0) return (size * 8) / (minutes * 60);
+    return size; // unknown runtime — bigger file is the best remaining guess
+  };
+  var res = function (stream) {
+    var m = /(\d{3,4})\s*p/i.exec(String(stream.quality || ""));
+    return m ? Number(m[1]) : 0;
+  };
+  return streams.slice().sort(function (a, b) {
+    var d = score(b) - score(a);
+    if (d !== 0) return d;
+    return res(b) - res(a);
+  });
+}
+
 export function episodeLabel(request) {
   var season = String(request.season || 0).padStart(2, "0");
   var episode = String(request.episode || 0).padStart(2, "0");

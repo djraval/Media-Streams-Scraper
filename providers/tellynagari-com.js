@@ -890,6 +890,27 @@ function bitrateLabel(sizeBytes, runtimeMinutes) {
 function displayBackend(backend) {
   return String(backend || "source");
 }
+function sortStreamsBest(streams, runtimeMinutes) {
+  var minutes = Number(runtimeMinutes) || 0;
+  var score = function(stream) {
+    if (stream.bandwidth)
+      return stream.bandwidth;
+    var size = Number(stream.sizeBytes) || 0;
+    if (size > 0 && minutes > 0)
+      return size * 8 / (minutes * 60);
+    return size;
+  };
+  var res = function(stream) {
+    var m = /(\d{3,4})\s*p/i.exec(String(stream.quality || ""));
+    return m ? Number(m[1]) : 0;
+  };
+  return streams.slice().sort(function(a, b) {
+    var d = score(b) - score(a);
+    if (d !== 0)
+      return d;
+    return res(b) - res(a);
+  });
+}
 function episodeLabel(request) {
   var season = String(request.season || 0).padStart(2, "0");
   var episode = String(request.episode || 0).padStart(2, "0");
@@ -1326,7 +1347,7 @@ function chainProvider(cfg) {
   }
   function getStreamsForRequest(request, options) {
     return resolveRequest(request, options).then(function(resolved) {
-      return dedupeStreams(resolved).map(function(stream) {
+      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function(stream) {
         if (cfg.streamName) {
           stream.name = cfg.streamName(stream);
         } else {

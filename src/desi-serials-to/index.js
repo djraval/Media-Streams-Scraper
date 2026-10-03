@@ -18,7 +18,7 @@ import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { episodePostCandidates } from "../lib/episodes.js";
 import { decodeJuicyCodes } from "../lib/packer.js";
 import { resolveVkPlayer } from "../lib/vkplayer.js";
-import { formatBytes, toNuvioStream } from "../lib/format.js";
+import { formatBytes, toNuvioStream, sortStreamsBest } from "../lib/format.js";
 
 // --- Layer 0: Site configuration constants ---
 
@@ -415,7 +415,7 @@ function getStreamsForRequest(request, options) {
   var fetchImpl = resolveFetch(options);
   return resolveDesiSerials(request, { fetchImpl: fetchImpl })
     .then(function (resolved) {
-      return dedupeStreams(resolved).map(function (stream) {
+      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream) {
         stream.name = providerDisplayName(stream);
         return toNuvioStream(request, stream);
       });

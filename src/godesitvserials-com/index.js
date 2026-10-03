@@ -18,7 +18,7 @@ import { resolveFetch, fetchText, fetchFirstResult, fetchJson, fetchContentLengt
 import { dedupe, dedupeStreams, links } from "../lib/html.js";
 import { buildMediaRequest, episodeDateSlug } from "../lib/tmdb.js";
 import { episodePostCandidates } from "../lib/episodes.js";
-import { toNuvioStream, formatBytes } from "../lib/format.js";
+import { toNuvioStream, formatBytes, sortStreamsBest } from "../lib/format.js";
 import {
   dramavideoWatchUrlFromMarkup,
   resolveDramavideoWatch,
@@ -209,7 +209,7 @@ function resolveGoDesi(request, options) {
 function getStreamsForRequest(request, options) {
   return resolveGoDesi(request, options)
     .then(function (resolved) {
-      return dedupeStreams(resolved).map(function (stream) {
+      return sortStreamsBest(dedupeStreams(resolved), request.runtimeMinutes).map(function (stream) {
         stream.name = "GoDesiTVSerials " + stream.backend;
         return toNuvioStream(request, stream);
       });
