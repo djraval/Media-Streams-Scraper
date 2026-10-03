@@ -737,8 +737,22 @@ function resolveUpbolt(embedUrl, options) {
   if (embedUrl.indexOf("http") !== 0) {
     embedUrl = "https://" + embedUrl.replace(/^\/\//, "");
   }
+  var idMatch = embedUrl.match(/\/(?:emb-|e\/)([A-Za-z0-9_-]+)/i);
   var crawler = { headers: { "User-Agent": CRAWLER_UA, Accept: "*/*" } };
-  return fetchText(fetchImpl, embedUrl, crawler).then(function(html) {
+  var page;
+  if (idMatch && /\/e\//i.test(embedUrl)) {
+    page = fetchText(fetchImpl, "https://upbolt.to/dl", {
+      method: "POST",
+      headers: {
+        "User-Agent": CRAWLER_UA,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: "op=embed&file_code=" + idMatch[1] + "&auto=1"
+    });
+  } else {
+    page = fetchText(fetchImpl, embedUrl, crawler);
+  }
+  return page.then(function(html) {
     if (!html)
       return null;
     var m = html.match(/sources\s*:\s*\[\s*\{[^}]*?file\s*:\s*["']([^"']+\.m3u8[^"']*)/i) || html.match(/["'](https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)["']/i);
@@ -1045,7 +1059,9 @@ function partitionUrls(markup, pageUrl, cfg) {
         if (mm) {
           var out = t.expand(mm, u.url) || [];
           out.forEach(function(nu) {
-            next.push({ url: nu, label: u.label });
+            next.push(
+              typeof nu === "string" ? { url: nu, label: u.label } : { url: nu.url, label: nu.label || u.label }
+            );
           });
         } else {
           next.push(u);

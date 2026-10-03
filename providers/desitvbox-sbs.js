@@ -1059,7 +1059,9 @@ function partitionUrls(markup, pageUrl, cfg) {
         if (mm) {
           var out = t.expand(mm, u.url) || [];
           out.forEach(function(nu) {
-            next.push({ url: nu, label: u.label });
+            next.push(
+              typeof nu === "string" ? { url: nu, label: u.label } : { url: nu.url, label: nu.label || u.label }
+            );
           });
         } else {
           next.push(u);

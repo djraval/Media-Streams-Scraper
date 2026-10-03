@@ -259,7 +259,13 @@ function partitionUrls(markup, pageUrl, cfg) {
         if (mm) {
           var out = t.expand(mm, u.url) || [];
           out.forEach(function (nu) {
-            next.push({ url: nu, label: u.label });
+            // expand may return plain urls or {url,label} objects to override
+            // the harvested label (e.g. the fsu redirect's variant name).
+            next.push(
+              typeof nu === "string"
+                ? { url: nu, label: u.label }
+                : { url: nu.url, label: nu.label || u.label },
+            );
           });
         } else {
           next.push(u);
