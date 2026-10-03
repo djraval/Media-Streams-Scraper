@@ -1,6 +1,6 @@
 {
   "name": "Desi-Serials Repo",
-  "version": "3.9.5",
+  "version": "3.9.6",
   "scrapers": [
     {
       "id": "desi-serials-to",
@@ -11,7 +11,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/desi-serials-to.js?v=3.9.5",
+      "filename": "providers/desi-serials-to.js?v=3.9.6",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -29,7 +29,7 @@
     {
       "id": "tellynagari-com",
       "name": "TellyNagari.com",
-      "filename": "providers/tellynagari-com.js?v=3.9.5",
+      "filename": "providers/tellynagari-com.js?v=3.9.6",
       "mediaTypes": [
         "tv"
       ],
@@ -38,12 +38,12 @@
         "hls"
       ],
       "enabled": true,
-      "version": "3.9.5"
+      "version": "3.9.6"
     },
     {
       "id": "desitvbox-sbs",
       "name": "DesiTvBox.sbs",
-      "filename": "providers/desitvbox-sbs.js?v=3.9.5",
+      "filename": "providers/desitvbox-sbs.js?v=3.9.6",
       "mediaTypes": [
         "tv"
       ],
@@ -52,7 +52,7 @@
         "hls"
       ],
       "enabled": true,
-      "version": "3.9.5"
+      "version": "3.9.6"
     },
     {
       "id": "desiruleztv-net",
@@ -63,7 +63,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/desiruleztv-net.js?v=3.9.5",
+      "filename": "providers/desiruleztv-net.js?v=3.9.6",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -80,7 +80,7 @@
     {
       "id": "desitellybox-to",
       "name": "DesiTellyBox.to",
-      "filename": "providers/desitellybox-to.js?v=3.9.5",
+      "filename": "providers/desitellybox-to.js?v=3.9.6",
       "mediaTypes": [
         "tv"
       ],
@@ -89,12 +89,12 @@
         "hls"
       ],
       "enabled": true,
-      "version": "3.9.5"
+      "version": "3.9.6"
     },
     {
       "id": "yodesi-net",
       "name": "YoDesi.net",
-      "filename": "providers/yodesi-net.js?v=3.9.5",
+      "filename": "providers/yodesi-net.js?v=3.9.6",
       "mediaTypes": [
         "tv"
       ],
@@ -102,7 +102,7 @@
         "hls"
       ],
       "enabled": true,
-      "version": "3.9.5"
+      "version": "3.9.6"
     },
     {
       "id": "godesitvserials-com",
@@ -113,7 +113,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/godesitvserials-com.js?v=3.9.5",
+      "filename": "providers/godesitvserials-com.js?v=3.9.6",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -137,7 +137,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/apnetv-pro.js?v=3.9.5",
+      "filename": "providers/apnetv-pro.js?v=3.9.6",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -160,7 +160,7 @@
       "supportedTypes": [
         "tv"
       ],
-      "filename": "providers/yodesionline-net.js?v=3.9.5",
+      "filename": "providers/yodesionline-net.js?v=3.9.6",
       "enabled": true,
       "logo": "",
       "contentLanguage": [
@@ -177,7 +177,7 @@
     {
       "id": "desiserials-su",
       "name": "DesiSerials.su",
-      "filename": "providers/desiserials-su.js?v=3.9.5",
+      "filename": "providers/desiserials-su.js?v=3.9.6",
       "mediaTypes": [
         "tv"
       ],
@@ -185,12 +185,12 @@
         "mp4"
       ],
       "enabled": true,
-      "version": "3.9.5"
+      "version": "3.9.6"
     },
     {
       "id": "bollyzone-to",
       "name": "Bollyzone.to",
-      "filename": "providers/bollyzone-to.js?v=3.9.5",
+      "filename": "providers/bollyzone-to.js?v=3.9.6",
       "mediaTypes": [
         "tv"
       ],
@@ -198,7 +198,7 @@
         "hls"
       ],
       "enabled": true,
-      "version": "3.9.5"
+      "version": "3.9.6"
     }
   ]
 }

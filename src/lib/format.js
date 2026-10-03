@@ -55,25 +55,31 @@ export function displayBackend(backend) {
   return String(backend || "source");
 }
 
-// Best-first ordering for a provider's returned streams. The app preserves each
-// provider's array order inside its group (groups themselves sort by installed
-// order, not quality), so the only "best on top" we control is within a group.
+// Best-first ordering for a provider's returned streams. The app re-sorts each
+// group's streams alphabetically by name (StreamFetchSupportKt
+// .sortedForGroupedDisplay), so callers rank-prefix stream.name after sorting
+// to reproduce this order in the UI.
 //
 // Rank by effective bitrate — HLS master BANDWIDTH when the backend exposed it,
-// else size-derived bitrate (all streams serve the same video → same runtime →
-// size ordering == bitrate ordering). Bitrate is weighted by resolution:
-// score = bitrate × res/720, so a 480p Flow at 1.2 Mbps (×0.67) cannot outrank
-// a real 720p MP4 at ~1.0 Mbps, while a genuine high-bitrate HLS still wins
-// outright. Unlabeled streams get a neutral ×1 — never a penalty we can't
-// verify (JW quality labels lie, so unknown res is treated as 720p-equivalent).
+// else a bitrate parsed out of the quality label, else size-derived bitrate
+// (all streams serve the same video → same runtime → size ordering == bitrate
+// ordering). Bitrate is weighted by resolution: score = bitrate × res/720, so
+// a 480p Flow at 1.2 Mbps (×0.67) cannot outrank a real 720p MP4 at ~1.0 Mbps,
+// while a genuine high-bitrate HLS still wins outright. Unlabeled streams get
+// a neutral ×1 — never a penalty we can't verify (JW quality labels lie, so
+// unknown res is treated as 720p-equivalent).
 export function sortStreamsBest(streams, runtimeMinutes) {
   var minutes = Number(runtimeMinutes) || 0;
   var res = function (stream) {
     var m = /(\d{3,4})\s*p/i.exec(String(stream.quality || ""));
     return m ? Number(m[1]) : 0;
   };
+  var labelBitrate = function (stream) {
+    var m = /(\d+(?:\.\d+)?)\s*Mbps/i.exec(String(stream.quality || ""));
+    return m ? Number(m[1]) * 1e6 : 0;
+  };
   var score = function (stream) {
-    var bw = stream.bandwidth || 0;
+    var bw = stream.bandwidth || labelBitrate(stream);
     if (!bw) {
       var size = Number(stream.sizeBytes) || 0;
       bw = size > 0 && minutes > 0 ? (size * 8) / (minutes * 60) : size;

@@ -668,8 +668,12 @@ function sortStreamsBest(streams, runtimeMinutes) {
     var m = /(\d{3,4})\s*p/i.exec(String(stream.quality || ""));
     return m ? Number(m[1]) : 0;
   };
+  var labelBitrate = function(stream) {
+    var m = /(\d+(?:\.\d+)?)\s*Mbps/i.exec(String(stream.quality || ""));
+    return m ? Number(m[1]) * 1e6 : 0;
+  };
   var score = function(stream) {
-    var bw = stream.bandwidth || 0;
+    var bw = stream.bandwidth || labelBitrate(stream);
     if (!bw) {
       var size = Number(stream.sizeBytes) || 0;
       bw = size > 0 && minutes > 0 ? size * 8 / (minutes * 60) : size;
