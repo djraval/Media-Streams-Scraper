@@ -61,24 +61,28 @@ export function displayBackend(backend) {
 //
 // Rank by effective bitrate — HLS master BANDWIDTH when the backend exposed it,
 // else size-derived bitrate (all streams serve the same video → same runtime →
-// size ordering == bitrate ordering). Resolution is only a tiebreaker: a
-// "1080p" reencode must never outrank a high-bitrate 720p original.
+// size ordering == bitrate ordering). Bitrate is weighted by resolution:
+// score = bitrate × res/720, so a 480p Flow at 1.2 Mbps (×0.67) cannot outrank
+// a real 720p MP4 at ~1.0 Mbps, while a genuine high-bitrate HLS still wins
+// outright. Unlabeled streams get a neutral ×1 — never a penalty we can't
+// verify (JW quality labels lie, so unknown res is treated as 720p-equivalent).
 export function sortStreamsBest(streams, runtimeMinutes) {
   var minutes = Number(runtimeMinutes) || 0;
-  var score = function (stream) {
-    if (stream.bandwidth) return stream.bandwidth;
-    var size = Number(stream.sizeBytes) || 0;
-    if (size > 0 && minutes > 0) return (size * 8) / (minutes * 60);
-    return size; // unknown runtime — bigger file is the best remaining guess
-  };
   var res = function (stream) {
     var m = /(\d{3,4})\s*p/i.exec(String(stream.quality || ""));
     return m ? Number(m[1]) : 0;
   };
+  var score = function (stream) {
+    var bw = stream.bandwidth || 0;
+    if (!bw) {
+      var size = Number(stream.sizeBytes) || 0;
+      bw = size > 0 && minutes > 0 ? (size * 8) / (minutes * 60) : size;
+    }
+    var r = res(stream);
+    return bw * (r > 0 ? Math.min(r, 2160) / 720 : 1);
+  };
   return streams.slice().sort(function (a, b) {
-    var d = score(b) - score(a);
-    if (d !== 0) return d;
-    return res(b) - res(a);
+    return score(b) - score(a);
   });
 }
 

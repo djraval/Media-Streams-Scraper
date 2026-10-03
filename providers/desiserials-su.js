@@ -892,23 +892,21 @@ function displayBackend(backend) {
 }
 function sortStreamsBest(streams, runtimeMinutes) {
   var minutes = Number(runtimeMinutes) || 0;
-  var score = function(stream) {
-    if (stream.bandwidth)
-      return stream.bandwidth;
-    var size = Number(stream.sizeBytes) || 0;
-    if (size > 0 && minutes > 0)
-      return size * 8 / (minutes * 60);
-    return size;
-  };
   var res = function(stream) {
     var m = /(\d{3,4})\s*p/i.exec(String(stream.quality || ""));
     return m ? Number(m[1]) : 0;
   };
+  var score = function(stream) {
+    var bw = stream.bandwidth || 0;
+    if (!bw) {
+      var size = Number(stream.sizeBytes) || 0;
+      bw = size > 0 && minutes > 0 ? size * 8 / (minutes * 60) : size;
+    }
+    var r = res(stream);
+    return bw * (r > 0 ? Math.min(r, 2160) / 720 : 1);
+  };
   return streams.slice().sort(function(a, b) {
-    var d = score(b) - score(a);
-    if (d !== 0)
-      return d;
-    return res(b) - res(a);
+    return score(b) - score(a);
   });
 }
 function episodeLabel(request) {
