@@ -63,7 +63,9 @@ export function displayBackend(backend) {
 // Rank by effective bitrate — HLS master BANDWIDTH when the backend exposed it,
 // else a bitrate parsed out of the quality label, else size-derived bitrate
 // (all streams serve the same video → same runtime → size ordering == bitrate
-// ordering). Bitrate is weighted by resolution: score = bitrate × res/720, so
+// ordering). When runtime is unknown, a nominal 60 min converts size to an
+// approximate bps — raw bytes must never be compared against real bitrates.
+// Bitrate is weighted by resolution: score = bitrate × res/720, so
 // a 480p Flow at 1.2 Mbps (×0.67) cannot outrank a real 720p MP4 at ~1.0 Mbps,
 // while a genuine high-bitrate HLS still wins outright. Unlabeled streams get
 // a neutral ×1 — never a penalty we can't verify (JW quality labels lie, so
@@ -82,7 +84,7 @@ export function sortStreamsBest(streams, runtimeMinutes) {
     var bw = stream.bandwidth || labelBitrate(stream);
     if (!bw) {
       var size = Number(stream.sizeBytes) || 0;
-      bw = size > 0 && minutes > 0 ? (size * 8) / (minutes * 60) : size;
+      bw = size > 0 ? (size * 8) / ((minutes > 0 ? minutes : 60) * 60) : 0;
     }
     var r = res(stream);
     return bw * (r > 0 ? Math.min(r, 2160) / 720 : 1);

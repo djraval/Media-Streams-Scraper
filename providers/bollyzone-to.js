@@ -904,7 +904,7 @@ function sortStreamsBest(streams, runtimeMinutes) {
     var bw = stream.bandwidth || labelBitrate(stream);
     if (!bw) {
       var size = Number(stream.sizeBytes) || 0;
-      bw = size > 0 && minutes > 0 ? size * 8 / (minutes * 60) : size;
+      bw = size > 0 ? size * 8 / ((minutes > 0 ? minutes : 60) * 60) : 0;
     }
     var r = res(stream);
     return bw * (r > 0 ? Math.min(r, 2160) / 720 : 1);
