@@ -22,13 +22,13 @@ src/
     format.js            # formatBytes, formatDuration, toNuvioStream, bitrateLabel
     episodes.js          # episodePostCandidates — date-slug / "-episode-N" / chronological matching
     dramavideo.js        # DramaVideo resolver — data-embed/data-a+b attrs → AES-CBC → HLS
-    upbolt.js            # UpBolt resolver — crawler-UA CF bypass → signed HLS
+    upbolt.js            # UpBolt resolver — DISABLED (edge fingerprint-gates signed URLs)
   desi-serials-to/       # VkPrime/VkSpeed/Flow from desi-serials.to (TV only)
   desiruleztv-net/       # VkPrime/VkSpeed from desiruleztv.net (TV only)
   yodesionline-net/      # VkPrime/VkSpeed from yodesionline.net (TV only)
   godesitvserials-com/   # MegaPlays/Yandex via token API + DramaVideo (TV only)
   apnetv-pro/            # DramaVideo from apnetv.pro (TV only)
-  desitvbox-sbs/         # VkPrime/VkSpeed + UpBolt HLS + local skins → Yandex HLS (TV only)
+  desitvbox-sbs/         # VkPrime/VkSpeed + local skins → Yandex HLS (TV only)
   desitellybox-to/       # Hop-chain (media.php/flix.php) → Flow + VkSpeed (TV only)
   tellynagari-com/       # tellyduniya gate → articleweb.xyz Yandex HLS + VkSpeed (TV only)
   yodesi-net/            # tvcine.me/player.php → flow.tvlogy.to HLS (TV only)
@@ -236,15 +236,26 @@ are ~40-120 lines of pure config:
   is baked in: a backend is always resolved with the page it was found on).
 - **Dedupe by canonical id** — flow by flowId (4 player.php ids → 1 stream),
   vk by embed id, meta by token, upbolt by file_code.
-- **UpBolt backend (upbolt.to)** — Cloudflare managed challenge gates normal
-  clients, but the operator whitelists social link-preview crawlers: fetching
-  with `User-Agent: facebookexternalhit/1.1` (or Discordbot/Telegram/WhatsApp)
-  returns the real player page. `/emb-{id}` serves the jwplayer page directly;
-  `/e/{id}` is a poster shell — POST `op=embed&file_code={id}&auto=1` to `/dl`.
-  The page has a plaintext `sources:[{file:"...master.m3u8"}]` with signed
-  ~24h tokens on `edgeNN.upbolt.to/hls2/`. **Tokens are UA-bound**: every
-  playlist/segment request must carry the crawler UA — carried in
-  `stream.headers` (same mechanism as Flow's Referer+UA).
+- **UpBolt backend (upbolt.to) — DISABLED Oct 2026** — the edge now
+  fingerprint-gates its signed HLS per-host: `master.m3u8` 200s only on
+  edge cache hits; variant playlists and `.ts` segments 403 for every
+  non-browser client (curl, wget, python-urllib, ffmpeg, OkHttp — i.e.
+  Nuvio's player) with ANY token/Referer/Origin/UA/HTTP-version, while
+  the same URL loads in real Chrome and node/undici. Gate is uniform
+  across every host (edgeNN, sNNN, i./gov., main-site /hls2); no MP4 or
+  download endpoint exists; CF Workers and public CORS proxies are also
+  fingerprint-denied. Cached objects DO serve denied clients, but a
+  denied request never populates the cache and warming ~400 segments
+  needs an outside allowed fingerprint — i.e. only a relay could fix it,
+  and this pack is scrapers-only by policy, so `resolveUpbolt` returns
+  null. Upbolt is only ever a mirror — posts carry VkSpeed/VkPrime MP4s
+  of the same episode and other providers cover upbolt-only posts.
+  If the gate is lifted, the old flow was: crawler UA → `emb-{id}` page →
+  `sources[].file` master.m3u8 → `stream.headers` carries the crawler UA.
+- **Fingerprint-gate tell** — a signed URL that 403s under curl but 200s
+  under real Chrome is a client-fingerprint gate (TLS/HTTP stack), not a
+  token/Referer problem: vary the FETCHER, not the headers — either drop
+  the backend or relay through a fetcher whose fingerprint passes.
 - **transforms[]** — per-site URL rewrites that consume ad-gate URLs and emit
   the real destination(s): tellynagari `tellyduniya/usn/{gate}.php?docid` →
   `articleweb.xyz/vid/{gdrive,vkspeed}.php?id=`; desiserials `getlink.php?v&
@@ -381,9 +392,10 @@ is unscrapable.
   hop page as `Referer`. Laravel shorteners (XSRF-TOKEN + laravel_session
   cookies) are referer launders, not gates.
 - **On a 403, vary one header at a time** — `Referer` first (flow.tvlogy 403s
-  on any referer except the embedding page), then `User-Agent` (upbolt
-  whitelists social-crawler UAs; its tokens are bound to the exact UA string
-  used at fetch). Don't conclude a host is dead after one naked fetch.
+  on any referer except the embedding page), then `User-Agent`, then the
+  fetcher itself (curl vs node vs browser — an edge fingerprint gate looks
+  exactly like a token/Referer 403 until you switch clients). Don't conclude
+  a host is dead after one naked fetch.
 - **Browser = ground truth for "is it alive / what does a user see";
   node fetch = ground truth for what a provider can use.** The QuickJS
   sandbox is a text fetcher — a flow that needs real DOM/JS/clicks can't be
