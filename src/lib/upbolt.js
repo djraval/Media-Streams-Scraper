@@ -1,78 +1,29 @@
-// UpBolt (upbolt.to) embed resolver.
+// UpBolt (upbolt.to) embed resolver — DISABLED (Oct 10, 2026).
 //
-// upbolt.to/emb-{id} and /e/{id} sit behind a Cloudflare managed challenge for
-// normal clients — but the operator whitelists social link-preview crawlers
-// (Facebook/Discord/Telegram/WhatsApp UAs), which receive the real player page.
-// The page carries a plaintext jwplayer().setup({sources:[{file:"...m3u8"}]})
-// pointing at edgeNN.upbolt.to/hls2/... master playlists with signed tokens
-// (~24h). The m3u8 itself is portable (no Referer, any UA).
+// What changed: upbolt's edge now fingerprint-gates its signed HLS URLs at the
+// ORIGIN, not just the embed page at Cloudflare. Verified same-day:
+//   - master.m3u8 returns 200 only on edge cache HITs; on MISS the origin 403s
+//   - variant playlists and .ts segments 403 at origin for curl, wget, python
+//     urllib and ffmpeg/ffprobe — every non-browser fingerprint — with ANY
+//     token, Referer, Origin or UA
+//   - the SAME signed URL fetches fine from real Chrome and from node/undici —
+//     the gate is the client's TLS/HTTP fingerprint, not the token class
+//   - Cloudflare now managed-challenges even the crawler-UA whitelist
+//     (facebookexternalhit/Discordbot/Twitterbot all get "Just a moment")
 //
-// Resolution: fetch embed with a crawler UA → first m3u8 in page → probe the
-// master playlist for RESOLUTION/BANDWIDTH.
-
-import { fetchText, resolveFetch } from "./http.js";
-import { parseHlsMasterPlaylist } from "./flow.js";
-
-var CRAWLER_UA =
-  "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)";
+// Effect in-app: the provider could still mint URLs through undici-class
+// fingerprints, but Nuvio's player stack is rejected → the stream lists, then
+// playback dies on the first variant/segment ("HTTP error"). A dead link is
+// worse than no link (upbolt is only ever a mirror — the same posts carry
+// VkSpeed/VkPrime MP4s of the same episode), so resolution is skipped
+// entirely. This also saves the serial embed+playlist RTTs.
+//
+// Previous mechanism (for re-enable if the gate is lifted): fetch emb-{id}
+// with a link-preview crawler UA → jwplayer().setup sources[0].file →
+// edgeNN.upbolt.to/hls2/... master.m3u8 signed ~24h.
 
 export var UPBOLT_RE = /upbolt\.to\/(?:emb-|e\/)[A-Za-z0-9_-]+/i;
 
-// /e/{id} is a poster shell: JS POSTs file_code to /dl (op=embed) to reach the
-// real player. /emb-{id} serves the player directly. Both emit the same page.
-export function resolveUpbolt(embedUrl, options) {
-  options = options || {};
-  var fetchImpl = resolveFetch(options);
-  if (embedUrl.indexOf("http") !== 0) {
-    embedUrl = "https://" + embedUrl.replace(/^\/\//, "");
-  }
-  var idMatch = embedUrl.match(/\/(?:emb-|e\/)([A-Za-z0-9_-]+)/i);
-  var crawler = { headers: { "User-Agent": CRAWLER_UA, Accept: "*/*" } };
-  var page;
-  if (idMatch && /\/e\//i.test(embedUrl)) {
-    page = fetchText(fetchImpl, "https://upbolt.to/dl", {
-      method: "POST",
-      headers: {
-        "User-Agent": CRAWLER_UA,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: "op=embed&file_code=" + idMatch[1] + "&auto=1",
-    });
-  } else {
-    page = fetchText(fetchImpl, embedUrl, crawler);
-  }
-  return page.then(function (html) {
-    if (!html) return null;
-    var m =
-      html.match(/sources\s*:\s*\[\s*\{[^}]*?file\s*:\s*["']([^"']+\.m3u8[^"']*)/i) ||
-      html.match(/["'](https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)["']/i);
-    if (!m) return null;
-    var masterUrl = m[1].replace(/\\\//g, "/");
-    var tag = "";
-    var tm = html.match(/<title>([^<]+)<\/title>/i);
-    if (tm) tag = tm[1].trim();
-    return fetchText(fetchImpl, masterUrl, crawler).then(function (manifest) {
-      var stream = {
-        backend: "upbolt",
-        kind: "hls",
-        quality: "",
-        url: masterUrl,
-        size: "",
-        sizeBytes: 0,
-        sourceTag: tag,
-        // The signed token is bound to the issuing UA class: playlist fetches
-        // must carry the crawler UA (the media segments are open). Nuvio applies
-        // stream.headers to playlist requests, same as Flow's Referer+UA.
-        headers: { "User-Agent": CRAWLER_UA },
-      };
-      if (manifest) {
-        var variants = parseHlsMasterPlaylist(manifest, masterUrl);
-        if (variants.length > 0) {
-          if (variants[0].height > 0) stream.quality = variants[0].height + "p";
-          stream.bandwidth = variants[0].bandwidth;
-        }
-      }
-      return stream;
-    });
-  });
+export function resolveUpbolt() {
+  return Promise.resolve(null);
 }
