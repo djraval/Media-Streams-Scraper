@@ -236,21 +236,24 @@ are ~40-120 lines of pure config:
   is baked in: a backend is always resolved with the page it was found on).
 - **Dedupe by canonical id** — flow by flowId (4 player.php ids → 1 stream),
   vk by embed id, meta by token, upbolt by file_code.
-- **UpBolt backend (upbolt.to) — DISABLED Oct 2026** — the edge now
-  fingerprint-gates its signed HLS at the ORIGIN: `master.m3u8` 200s only on
+- **UpBolt backend (upbolt.to) — relay-fixed Oct 2026** — the edge now
+  fingerprint-gates its signed HLS per-host: `master.m3u8` 200s only on
   edge cache hits; variant playlists and `.ts` segments 403 for every
-  non-browser client (curl, wget, python-urllib, ffmpeg) with ANY
-  token/Referer/Origin/UA, while the same URL loads in real Chrome and
-  node/undici. Nuvio's player fingerprint is rejected → every emitted stream
-  is a dead link, so `resolveUpbolt` returns null (upbolt is only ever a
-  mirror — posts carry VkSpeed/VkPrime MP4s of the same episode). CF also
-  managed-challenges the crawler-UA whitelist now. If the gate is lifted,
-  the old flow was: crawler UA → `emb-{id}` page → `sources[].file`
-  master.m3u8 → `stream.headers` carries the crawler UA.
+  non-browser client (curl, wget, python-urllib, ffmpeg, OkHttp — i.e.
+  Nuvio's player) with ANY token/Referer/Origin/UA, while the same URL
+  loads in real Chrome and node/undici. Fix: emitted stream URLs route
+  through `UPBOLT_RELAY` in `src/lib/upbolt.js` — a ~50-line m3u8-rewriting
+  proxy (`relay/server.js`) that fetches upstream with node/undici (passes
+  the gate) and rewrites every absolute playlist URL back through itself,
+  so the app never touches the gated edge. The relay URL is deployment-
+  specific — rehost `relay/server.js` on any always-on undici-capable host
+  and swap the `UPBOLT_RELAY` constant when the current endpoint dies.
+  Flow: crawler UA → `emb-{id}` page → `sources[].file` master.m3u8 →
+  emit `RELAY + enc(master)` (quality probe also via relay).
 - **Fingerprint-gate tell** — a signed URL that 403s under curl but 200s
   under real Chrome is a client-fingerprint gate (TLS/HTTP stack), not a
-  token/Referer problem: vary the FETCHER, not the headers, and no in-app
-  fix is possible — drop the backend.
+  token/Referer problem: vary the FETCHER, not the headers — either drop
+  the backend or relay through a fetcher whose fingerprint passes.
 - **transforms[]** — per-site URL rewrites that consume ad-gate URLs and emit
   the real destination(s): tellynagari `tellyduniya/usn/{gate}.php?docid` →
   `articleweb.xyz/vid/{gdrive,vkspeed}.php?id=`; desiserials `getlink.php?v&
